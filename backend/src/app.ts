@@ -206,6 +206,10 @@ async function getValidSessionToken(): Promise<string> {
  * 🛰️ Postman API Route B: Direct Instapay Trace Scanner Module (Adaptive Production Core)
  */
 app.get('/transactions/details/instapay/trace', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
   const { date, traceNumber } = req.query;
 
   if (!traceNumber) {
@@ -408,10 +412,27 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
 // 🛰️ Postman API Route A: Universal Wildcard Reference Search Router
 // =========================================================================
 app.get('/transactions/details/:referenceId', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const { referenceId } = req.params;
+  const cleanReferenceId = String(referenceId).trim();
+
   try {
-    const bearerToken = await getValidSessionToken();
-    const productionResponse = await axios.get(`${TRAXION_BASE_URL}/transactions/details/${encodeURIComponent(referenceId)}`, {
+    // 🔑 1. FETCH LIVE ACTIVE SESSION DATA
+    const sessionContext: any = await getValidSessionToken(); 
+    
+    let bearerToken = "";
+    let dynamicSecretSeed = "ZIPVWMWSTCGZTAFI"; 
+
+    if (sessionContext && typeof sessionContext === 'object') {
+      bearerToken = sessionContext.accessToken || '';
+      if (sessionContext.secretKey) {
+        dynamicSecretSeed = sessionContext.secretKey;
+      }
+    } else if (typeof sessionContext === 'string') {
+      bearerToken = sessionContext;
+    }
+
+    const productionResponse = await axios.get(`${TRAXION_BASE_URL}/transactions/details/${encodeURIComponent(cleanReferenceId)}`, {
       headers: {
         'Authorization': `Bearer ${bearerToken}`,
         'Content-Type': 'application/json',
@@ -420,27 +441,133 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
     });
 
     let payloadData = productionResponse.data;
-    const serverResponseTimestamp = productionResponse.headers['x-server-timestamp'];
+    const serverResponseTimestamp = productionResponse.headers['x-server-timestamp'] || productionResponse.headers['X-Server-Timestamp'];
 
-    // 🔓 Run the identical automated decryption routines for structural wildcard queries
-    if (payloadData && typeof payloadData.data === 'string' && payloadData.data.startsWith('U2FsdGVkX1')) {
-      // 🚀 FIXED: Swapped passphrase string to completely align with your target gateway layout matrices
-      const masterSecretSeed = "BJDERUXAXPJFVFIB"; 
-      
-      const calculatedDecryptionOtp = generateRollingTOTP(masterSecretSeed, Number(serverResponseTimestamp || Date.now()));
-      const bytesDecrypted = CryptoJS.AES.decrypt(payloadData.data, calculatedDecryptionOtp);
-      const plainTextJsonString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
-      
-      if (plainTextJsonString) {
-        payloadData.data = JSON.parse(plainTextJsonString);
+    // 🔓 Automated Decryption Routine with Dynamic Key Matrices
+    if (payloadData && typeof payloadData.data === 'string') {
+      let cleanCiphertext = payloadData.data.trim();
+
+      if (cleanCiphertext.startsWith('"') && cleanCiphertext.endsWith('"')) {
+        cleanCiphertext = cleanCiphertext.substring(1, cleanCiphertext.length - 1);
+      }
+
+      if (cleanCiphertext.includes('U2FsdGVkX1')) {
+        let plainTextJsonString = "";
+        const candidateTimes: number[] = [];
+        
+        if (serverResponseTimestamp) {
+          candidateTimes.push(Number(serverResponseTimestamp));
+        }
+        
+        if (cleanReferenceId.length >= 8) {
+          const year = parseInt(cleanReferenceId.substring(0, 4), 10);
+          const month = parseInt(cleanReferenceId.substring(4, 6), 10) - 1;
+          const day = parseInt(cleanReferenceId.substring(6, 8), 10);
+          
+          if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+            candidateTimes.push(new Date(Date.UTC(year, month, day, 12, 0, 0)).getTime());
+            candidateTimes.push(new Date(Date.UTC(year, month, day - 1, 12, 0, 0)).getTime());
+            candidateTimes.push(new Date(Date.UTC(year, month, day - 1, 16, 0, 0)).getTime());
+          }
+        }
+        
+        candidateTimes.push(Date.now());
+
+        const comprehensiveTimeMatrix: number[] = [];
+        for (const baseTime of candidateTimes) {
+          comprehensiveTimeMatrix.push(baseTime, baseTime - 1000, baseTime + 1000);
+        }
+
+        for (const targetTimestamp of comprehensiveTimeMatrix) {
+          try {
+            const calculatedDecryptionOtp = generateRollingTOTP(dynamicSecretSeed, targetTimestamp);
+            const bytesDecrypted = CryptoJS.AES.decrypt(cleanCiphertext, calculatedDecryptionOtp);
+            const testString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
+            
+            if (testString && testString.trim().length > 0) {
+              plainTextJsonString = testString;
+              console.log(`🔓 [Crypto Engine Sync]: Decryption success via epoch offset: ${targetTimestamp}`);
+              break;
+            }
+          } catch (innerCryptoErr) {
+            // Check next timestamp offset
+          }
+        }
+        
+        if (plainTextJsonString) {
+          payloadData.data = JSON.parse(plainTextJsonString);
+        } else {
+          throw new Error("Dynamic key window desynchronization. Decrypted bytes rejected.");
+        }
       }
     }
 
-    return res.json(payloadData);
+    // =========================================================================
+    // 📥 🔄 MULTI-ITEM ADAPTIVE EXTRACTION MATRIX (RETAIN DUPLICATES)
+    // =========================================================================
+    let innerDataBlock = payloadData?.data;
+    let rawItemsArray: any[] = [];
+
+    if (innerDataBlock) {
+      if (Array.isArray(innerDataBlock)) {
+        rawItemsArray = innerDataBlock;
+      } else if (innerDataBlock.list && Array.isArray(innerDataBlock.list)) {
+        rawItemsArray = innerDataBlock.list;
+      } else if (innerDataBlock.data) {
+        rawItemsArray = Array.isArray(innerDataBlock.data) ? innerDataBlock.data : [innerDataBlock.data];
+      } else if (typeof innerDataBlock === 'object') {
+        rawItemsArray = [innerDataBlock];
+      }
+    }
+
+    // =========================================================================
+    // ₱ ✨ DATA UNIFICATION & MAPPING LAYER (MAPPED FOR ALL DETECTED DUPLICATES)
+    // =========================================================================
+    if (rawItemsArray.length > 0) {
+      const unifiedRecords = rawItemsArray.map((extractedItem: any) => {
+        const incomingAmount = extractedItem.transactionAmount ?? extractedItem.amount ?? 0;
+        const incomingFee = extractedItem.transactionFee ?? extractedItem.fee ?? 0;
+
+        // Formats raw strings/numbers safely to Peso decimals without centavo inflation
+        const finalAmountPeso = parseFloat(String(incomingAmount));
+        const finalFeePeso = parseFloat(String(incomingFee));
+
+        return {
+          transactionReferenceNumber: extractedItem.transactionReferenceNumber || extractedItem.referenceId || cleanReferenceId,
+          integratorReferenceNumber: extractedItem.integratorReferenceNumber || '---',
+          aggregatorReferenceNumber: extractedItem.aggregatorReferenceSegment || extractedItem.aggregatorReferenceNumber || '---',
+          transactionAmount: isNaN(finalAmountPeso) ? 0 : finalAmountPeso,
+          transactionFee: isNaN(finalFeePeso) ? 0 : finalFeePeso,
+          status: extractedItem.status ?? 'SUCCESSFUL',
+          remarks: extractedItem.remarks || extractedItem.description || null,
+          description: extractedItem.description || extractedItem.remarks || 'Universal Ledger Registry Query',
+          dateTimeCreated: extractedItem.dateTimeCreated || extractedItem.created_at || new Date().toISOString(),
+          dateTimeStatusUpdated: extractedItem.dateTimeStatusUpdated || extractedItem.updated_at || new Date().toISOString()
+        };
+      });
+
+      // 💡 Return an array inside data so your frontend can loop/render duplicate cards
+      return res.json({
+        code: 200000,
+        message: `Successfully processed ${unifiedRecords.length} matching ledger profile(s).`,
+        data: unifiedRecords
+      });
+    } else {
+      return res.status(404).json({
+        code: 404000,
+        message: "No active transaction records found matching this reference sequence.",
+        data: []
+      });
+    }
+
   } catch (err: any) {
-    console.error('❌ [Live Reference Identifier Endpoint Failure]:', err.response?.data || err.message);
+    console.error('❌ [Live Reference Identifier Endpoint Failure]:', err.message);
     const codeStatus = err.response?.status || 500;
-    return res.status(codeStatus).json({ message: "Failed locating reference sequence in backend logs." });
+    return res.status(codeStatus).json({ 
+      code: 404000, 
+      message: "Failed locating reference sequence in backend logs.",
+      data: []
+    });
   }
 });
 

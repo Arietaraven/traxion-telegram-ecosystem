@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import InvoiceDetailView from './views/InvoiceDetailView';
-import UniversalDetailView from './views/UniversalDetailView'; // 🚀 ADDED: Imported new view file
+import UniversalDetailView from './views/UniversalDetailView'; 
 import InvoicePlaceholderView from './views/InvoicePlaceholderView';
 
 export default function App() {
@@ -9,32 +9,23 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // Track rendering locks to prevent loop collision fields
+  // 🔒 Use refs to safely keep track of active sync states without triggering rendering loops
   const isFetchingRef = useRef(false);
+  const lastTrackedCodeRef = useRef<string | null>(null);
+  const lastTrackedDateRef = useRef<string | null>(null);
 
   // 📡 CORE DATA ROUTING ENGINE
-  async function fetchLiveLedgerData() {
+  async function fetchLiveLedgerData(forcedCode: string | null, forcedDate: string | null) {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
-    // 🔄 FORCE RESET REVENUE STATES IMMEDIATELY
+    // 🔄 Trigger clean state transitions
     setLoading(true);
-    setTransactionsList([]);
     setApiError(null);
 
-    // Read variables dynamically straight from the browser frame context window
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    let urlQueryDate = params.get('date'); 
-    
-    if (!urlQueryDate) {
-      urlQueryDate = new Date().toISOString().split('T')[0];
-    }
-    
-    setInvoiceCode(code);
-
-    if (!code) {
+    if (!forcedCode) {
       setApiError("Secure parameter session token tracking missing.");
+      setTransactionsList([]);
       setLoading(false);
       isFetchingRef.current = false;
       return;
@@ -44,14 +35,14 @@ export default function App() {
       const targetOrigin = window.location.origin;
       let response;
 
-      if (/^\d{6}$/.test(code)) {
-        console.log(`📡 [Frontend Core Sync]: Processing Trace #${code} (Date: ${urlQueryDate})`);
-        response = await fetch(`${targetOrigin}/transactions/details/instapay/trace?date=${urlQueryDate}&traceNumber=${encodeURIComponent(code)}`, {
+      if (/^\d{6}$/.test(forcedCode)) {
+        console.log(`📡 [Frontend Core Sync]: Processing Trace #${forcedCode} (Date: ${forcedDate})`);
+        response = await fetch(`${targetOrigin}/transactions/details/instapay/trace?date=${forcedDate}&traceNumber=${encodeURIComponent(forcedCode)}`, {
           headers: { 'ngrok-skip-browser-warning': 'true' }
         });
       } else {
-        console.log(`📡 [Frontend Core Sync]: Processing Reference Hash: ${code}`);
-        response = await fetch(`${targetOrigin}/transactions/details/${encodeURIComponent(code)}`, {
+        console.log(`📡 [Frontend Core Sync]: Processing Reference Hash: ${forcedCode}`);
+        response = await fetch(`${targetOrigin}/transactions/details/${encodeURIComponent(forcedCode)}`, {
           headers: { 'ngrok-skip-browser-warning': 'true' }
         });
       }
@@ -85,13 +76,14 @@ export default function App() {
     } catch (err: any) {
       console.error('❌ [API Sync Failure]:', err.message);
       setApiError(err.message || "Ledger transaction data synchronization pending execution.");
+      setTransactionsList([]);
     } finally {
       setLoading(false);
       isFetchingRef.current = false;
     }
   }
 
-  // 🚀 HARDWARE SYNC HANDLER LIFE CYCLE LOCK
+  // 🚀 UNIFIED HARDWARE EVENT SYNC LIFECYCLE
   useEffect(() => {
     const tg = (window as any).Telegram?.WebApp;
     
@@ -102,38 +94,52 @@ export default function App() {
         if (tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
           if (tg.setHeaderColor) tg.setHeaderColor('bg_color');
         }
-
-        // ✨ THE ULTIMATE TELEGRAM LIFECYCLE SYNC:
-        // By watching Telegram's viewport and main event loop changes directly,
-        // we force a clean URL synchronization when the window is brought to the front.
-        tg.onEvent('viewportChanged', () => {
-          console.log("⚡ [Telegram UI Viewport Changed Trigger Caught]");
-          // Forces location parameter evaluations fresh out of the context parameters
-          const cleanCodeCheck = new URLSearchParams(window.location.search).get('code');
-          if (cleanCodeCheck) {
-            fetchLiveLedgerData();
-          }
-        });
-
       } catch (err) {
         console.warn("Telegram WebApp system bindings safely bypassed:", err);
       }
     }
 
-    // Fallback Polling Loop Layer: Safely forces location re-evaluations
-    const queryBackupSyncLoop = setInterval(() => {
-      const liveParams = new URLSearchParams(window.location.search);
-      const currentCodeParam = liveParams.get('code');
+    // Function to analyze URL query updates natively
+    const synchronizeCurrentUrlParams = () => {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      let urlQueryDate = params.get('date'); 
       
-      // If code doesn't match active state tracker profile values, update them immediately
-      if (currentCodeParam && currentCodeParam !== invoiceCode && !loading) {
-        fetchLiveLedgerData();
+      if (!urlQueryDate) {
+        urlQueryDate = new Date().toISOString().split('T')[0];
       }
-    }, 500);
 
-    // Initial Fetch execution routine invocation on component initialization mount
-    fetchLiveLedgerData();
+      // ✨ PREVENT INFINITE LOOP BLINKING: Only trigger fetch if parameters actually changed
+      if (code !== lastTrackedCodeRef.current || urlQueryDate !== lastTrackedDateRef.current) {
+        console.log(`🔄 [Parameter Shift Verified]: Updating from ${lastTrackedCodeRef.current} -> ${code}`);
+        
+        lastTrackedCodeRef.current = code;
+        lastTrackedDateRef.current = urlQueryDate;
+        
+        setInvoiceCode(code);
+        fetchLiveLedgerData(code, urlQueryDate);
+      }
+    };
 
+    // ⚡ Wire up Telegram Native Viewport event listeners
+    if (tg) {
+      try {
+        tg.onEvent('viewportChanged', () => {
+          console.log("⚡ [Telegram UI Viewport Changed]");
+          synchronizeCurrentUrlParams();
+        });
+      } catch (e) {}
+    }
+
+    // ⏱️ Safe Polling Loop Interceptor with explicit change guards
+    const queryBackupSyncLoop = setInterval(() => {
+      synchronizeCurrentUrlParams();
+    }, 400);
+
+    // Initial direct invocation run on component mount execution
+    synchronizeCurrentUrlParams();
+
+    // 🧹 Clean up hooks to drop interval duplicates on re-renders
     return () => {
       clearInterval(queryBackupSyncLoop);
       if (tg) {
@@ -142,9 +148,8 @@ export default function App() {
         } catch (e) {}
       }
     };
-  }, [invoiceCode]);
+  }, []); // 💡 Keep array empty! It manages internal variables via safe pointers natively.
 
-  // Evaluates once if the current lookup parameter is a classic 6-digit trace code
   const isStandardInvoiceTrace = invoiceCode ? /^\d{6}$/.test(invoiceCode) : true;
 
   return (
@@ -165,7 +170,6 @@ export default function App() {
         <div style={{ color: '#8aa1b5', fontSize: '14px', marginTop: '40vh' }}>🚀 Synchronizing Live Ledger State Matrix...</div>
       ) : transactionsList.length > 0 ? (
         transactionsList.map((txRecord, idx) => (
-          /* 🚀 ADDED: Renders standard trace component layout or new separate layout view dynamically */
           isStandardInvoiceTrace ? (
             <InvoiceDetailView 
               key={txRecord.transactionReferenceNumber || txRecord.referenceId || idx} 
