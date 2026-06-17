@@ -8,7 +8,7 @@ interface TransactionPayload {
   transactionAmount?: string | number;
   transactionFee?: number;
   messageToRecipient?: string;
-  status: number | string; 
+  status?: number | string; 
   remarks?: string;
   description?: string;
   dateTimeCreated?: string;
@@ -19,16 +19,21 @@ interface TransactionPayload {
   referenceId?: string;
   amount?: string | number;
   created_at?: string;
+  
+  // Error diagnostic payload captures
+  error?: string;
+  statusCode?: number | string;
+  message?: string;
 }
 
 interface InvoiceDetailViewProps {
-  transaction: TransactionPayload;
+  transaction: TransactionPayload | null | undefined;
   invoiceCode: string | null;
 }
 
 export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceDetailViewProps) {
   
-  // 🚀 FIXED: Isolated layout hook tracks window parameters without triggering version 6.0 exceptions
+  // 🚀 Isolated layout hook tracks window parameters without triggering version exceptions
   useEffect(() => {
     const tg = (window as any).Telegram?.WebApp;
     if (tg && tg.isVersionAtLeast && tg.isVersionAtLeast('6.1')) {
@@ -40,32 +45,40 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
     }
   }, []);
 
-// Safe Fallback Extractors: Safely grabs properties wherever they exist in the object tree
-  const refNum = transaction.transactionReferenceNumber || transaction.referenceId || transaction.traceNumber || '---';
-  const integRef = transaction.integratorReferenceNumber || '---';
-  const aggRef = transaction.aggregatorReferenceNumber || '---';
+  // Safe Fallback Extractors: Safely grabs properties wherever they exist in the object tree
+  const refNum = transaction?.transactionReferenceNumber || transaction?.referenceId || transaction?.traceNumber || invoiceCode || '---';
+  const integRef = transaction?.integratorReferenceNumber || '---';
+  const aggRef = transaction?.aggregatorReferenceNumber || '---';
   
+  // Isolated target query identifier sequence
+  const activeQueryKey = invoiceCode || refNum;
+
+  // 🎯 STRICT NOT FOUND CONDITIONAL CHECK
+  // True when the transaction payload object is entirely missing, empty, or returns a 404 response
+  const isNotFound = 
+    !transaction || 
+    Object.keys(transaction).length === 0 ||
+    transaction.statusCode === 404 ||
+    String(transaction.status).toUpperCase() === 'NOT FOUND';
+
+  // 📊 STATUS ENUM SEGMENTATION PIPELINE (Only parsed if the record actually exists)
+  const currentStatus = transaction?.status !== undefined ? String(transaction.status) : '';
+  
+  const isSuccessful = !isNotFound && (currentStatus === '1' || currentStatus.toUpperCase() === 'SUCCESSFUL' || currentStatus.toUpperCase() === 'SUCCESS' || currentStatus.toUpperCase() === 'PAID');
+  const isPending = !isNotFound && (currentStatus === '0' || currentStatus.toUpperCase() === 'PENDING');
+  const isFailed = !isNotFound && (currentStatus === '-1' || currentStatus.toUpperCase() === 'FAILED');
+
   // ₱ CENTAVO TO PESO CONVERSION PIPELINE
-  // 1. Convert Base Amount: "50000" centavos -> 500.00 Pesos
-  const rawAmountInput = transaction.transactionAmount ?? transaction.amount ?? 0;
-  const rawAmount = (typeof rawAmountInput === 'string' ? parseFloat(rawAmountInput) : rawAmountInput) / 100;
+  const rawAmountInput = transaction?.transactionAmount ?? transaction?.amount ?? 0;
+  const rawAmount = (typeof rawAmountInput === 'string' ? parseFloat(rawAmountInput) : Number(rawAmountInput)) / 100;
 
-  // 2. Convert Gateway Fee: 375 centavos -> 3.75 Pesos
-  const rawFeeInput = transaction.transactionFee || 0;
-  const feeAmount = (typeof rawFeeInput === 'string' ? parseFloat(rawFeeInput) : rawFeeInput) / 100;
+  const rawFeeInput = transaction?.transactionFee || 0;
+  const feeAmount = (typeof rawFeeInput === 'string' ? parseFloat(rawFeeInput) : Number(rawFeeInput)) / 100;
 
-  // 3. Compute Total Display Accurately: 500.00 + 3.75 = 503.75 Pesos
   const totalDisplay = rawAmount + feeAmount;
 
-  // Flexible status parsing handles both numeric codes and raw system transaction string states
-  const isSuccessful = 
-    transaction.status === 1 || 
-    String(transaction.status).toUpperCase() === 'SUCCESSFUL' || 
-    String(transaction.status).toUpperCase() === 'PAID' ||
-    String(transaction.status).toUpperCase() === 'SUCCESS';
-
-  const dateCreated = transaction.dateTimeCreated || transaction.created_at || new Date().toISOString();
-  const dateUpdated = transaction.dateTimeStatusUpdated || dateCreated;
+  const dateCreated = transaction?.dateTimeCreated || transaction?.created_at || new Date().toISOString();
+  const dateUpdated = transaction?.dateTimeStatusUpdated || dateCreated;
 
   const formatDate = (isoString?: string) => {
     if (!isoString) return '---';
@@ -79,24 +92,84 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
     });
   };
 
+  // 🚨 DISPLAY MODE A: UNIVERSAL SEARCH TRACKER (NOT FOUND VIEW)
+  if (isNotFound) {
+    return (
+      <div style={{ ...styles.card, borderColor: 'rgba(239, 68, 68, 0.35)', backgroundColor: 'rgba(24, 30, 41, 0.95)' }}>
+        {/* Upper Status Badge Layer */}
+        <div style={styles.badgeContainer}>
+          <div style={{
+            ...styles.statusBadge,
+            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+            color: '#ef4444',
+            border: '1px solid rgba(239, 68, 68, 0.3)'
+          }}>
+            ❌ RECORD SEGMENT • MISSING
+          </div>
+        </div>
+
+        <h1 style={styles.universalTitle}>Invoice Search Tracker</h1>
+        
+        {/* Center Visual Search Indicator Matrix */}
+        <div style={{ margin: '32px 0 24px 0', textAlign: 'center' }}>
+          <div style={{ fontSize: '54px', marginBottom: '14px', filter: 'drop-shadow(0px 4px 10px rgba(0,0,0,0.3))' }}>🔍</div>
+          <span style={{ color: '#ef4444', fontWeight: 800, fontSize: '17px', display: 'block', letterSpacing: '0.5px' }}>
+            TRANSACTION NOT FOUND
+          </span>
+          <p style={{ color: '#8aa1b5', fontSize: '13px', margin: '8px auto 0 auto', maxWidth: '300px', lineHeight: '1.5' }}>
+            This explicit reference sequence could not be matched with active history logs across ledger repositories.
+          </p>
+        </div>
+
+        <div style={styles.divider} />
+
+        <div style={styles.metaGrid}>
+          {/* Target Query Key high-visibility warning wrapper */}
+          <div style={{ ...styles.targetQueryCard, backgroundColor: 'rgba(239, 68, 68, 0.04)', borderColor: 'rgba(239, 68, 68, 0.25)' }}>
+            <span style={{ ...styles.targetQueryLabel, color: '#ef4444' }}>Target Query Key</span>
+            <div style={{ ...styles.targetQueryValue, color: '#ffffff' }}>{activeQueryKey}</div>
+          </div>
+
+          <div style={styles.metaRow}>
+            <span style={styles.metaLabel}>Processing State</span>
+            <span style={{ color: '#ef4444', fontWeight: 700, fontSize: '13px', letterSpacing: '0.3px' }}>NOT FOUND</span>
+          </div>
+          
+          <div style={styles.metaRow}>
+            <span style={styles.metaLabel}>Scan Reference ID</span>
+            <span style={{ ...styles.timeValue, fontFamily: 'monospace', color: '#8aa1b5' }}>{refNum}</span>
+          </div>
+        </div>
+
+        <div style={styles.divider} />
+        <p style={styles.footerNote}>🔒 Secure Sandbox Dynamic Session Complete</p>
+      </div>
+    );
+  }
+
+  // 📋 DISPLAY MODE B: STANDARD TRANSACTION INVOICE CARD (FOUND VIEW)
   return (
     <div style={styles.card}>
-      {/* Dynamic Status Pill */}
+      {/* Dynamic Status Pill matching 1, 0, -1 rules precisely */}
       <div style={styles.badgeContainer}>
         <div style={{
           ...styles.statusBadge,
-          backgroundColor: isSuccessful ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-          color: isSuccessful ? '#10b981' : '#ef4444',
+          backgroundColor: isSuccessful ? 'rgba(16, 185, 129, 0.12)' : isPending ? 'rgba(251, 191, 36, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+          color: isSuccessful ? '#10b981' : isPending ? '#fbbf24' : '#ef4444',
+          border: isSuccessful 
+            ? '1px solid rgba(16, 185, 129, 0.25)' 
+            : isPending 
+            ? '1px solid rgba(251, 191, 36, 0.25)' 
+            : '1px solid rgba(239, 68, 68, 0.25)'
         }}>
-          ● {isSuccessful ? 'SUCCESSFUL' : 'FAILED'}
+          ● {isSuccessful ? 'SUCCESSFUL' : isPending ? 'PENDING' : 'FAILED'}
         </div>
       </div>
 
       {/* Dynamic Transaction Category Header */}
       <h1 style={styles.merchantTitle}>
-        {transaction.remarks ? 'InstaPay Credit Transfer' : (transaction.description || 'Payment Processing')}
+        {transaction?.remarks ? 'InstaPay Credit Transfer' : (transaction?.description || 'Payment Processing')}
       </h1>
-      <p style={styles.subtitle}>System Channel Gateway</p>
       
       {/* Price View Display */}
       <div style={styles.amountDisplay}>
@@ -108,44 +181,27 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
       
       {/* Reference Metadata Registry Blocks */}
       <div style={styles.metaGrid}>
-        <div style={styles.metaRow}>
-          <span style={styles.metaLabel}>Transaction Ref</span>
-          <span style={{ ...styles.metaValue, fontFamily: 'monospace', fontWeight: 'bold' }}>
-            {refNum}
-          </span>
-        </div>
         
-        <div style={styles.metaRow}>
-          <span style={styles.metaLabel}>Integrator Ref</span>
-          <span style={{ ...styles.metaValue, fontFamily: 'monospace' }}>
-            {integRef}
-          </span>
+        {/* Unified Target Query reference point */}
+        <div style={styles.targetQueryCard}>
+          <span style={styles.targetQueryLabel}>Target Query Key</span>
+          <div style={styles.targetQueryValue}>{activeQueryKey}</div>
         </div>
 
         <div style={styles.nestedBox}>
-          <span style={styles.nestedLabel}>Aggregator ID Segment</span>
+          <span style={styles.nestedLabel}>Transaction Reference Number</span>
+          <div style={styles.nestedValue}>{refNum}</div>
+        </div>
+        
+        <div style={styles.nestedBox}>
+          <span style={styles.nestedLabel}>Integrator Reference Number</span>
+          <div style={styles.nestedValue}>{integRef}</div>
+        </div>
+
+        <div style={styles.nestedBox}>
+          <span style={styles.nestedLabel}>Aggregator Reference Number</span>
           <div style={styles.nestedValue}>{aggRef}</div>
         </div>
-
-        <div style={styles.dividerInside} />
-
-        <div style={styles.metaRow}>
-          <span style={styles.metaLabel}>Base Amount</span>
-          <span style={styles.metaValue}>PHP {rawAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-        </div>
-
-        <div style={styles.metaRow}>
-          <span style={styles.metaLabel}>Gateway Fee</span>
-          <span style={styles.metaValue}>PHP {feeAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-        </div>
-
-        {/* Remittance secures parameters text logging */}
-        {transaction.remarks && (
-          <div style={styles.nestedBoxRemark}>
-            <span style={styles.nestedLabel}>Remittance Parameters</span>
-            <div style={styles.remarkText}>{transaction.remarks}</div>
-          </div>
-        )}
 
         <div style={styles.dividerInside} />
 
@@ -161,37 +217,47 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
       </div>
 
       <div style={styles.divider} />
-      <p style={styles.footerNote}>🔒 Securely tracked via Traxion Core Ledger Matrix</p>
     </div>
   );
 }
 
 const styles: { [key: string]: React.CSSProperties } = {
   card: {
-    backgroundColor: 'var(--tg-theme-secondary-bg-color, #242f3d)',
-    borderRadius: '16px',
+    backgroundColor: 'var(--tg-theme-secondary-bg-color, #181e29)',
+    borderRadius: '20px',
     padding: '24px 20px',
     width: '100%',
-    maxWidth: '400px',
-    boxShadow: '0 10px 30px rgba(0, 0, 0, 0.4)',
+    maxWidth: '420px',
+    boxShadow: '0 12px 36px rgba(0, 0, 0, 0.45)',
     border: '1px solid rgba(255, 255, 255, 0.06)',
+    boxSizing: 'border-box',
+    margin: '0 auto'
   },
   badgeContainer: {
     display: 'flex',
     justifyContent: 'center',
-    marginBottom: '12px',
+    marginBottom: '16px',
   },
   statusBadge: {
     fontSize: '11px',
     fontWeight: 700,
-    letterSpacing: '0.8px',
-    padding: '4px 12px',
-    borderRadius: '20px',
+    letterSpacing: '0.6px',
+    padding: '6px 16px',
+    borderRadius: '30px',
+    textTransform: 'uppercase'
+  },
+  universalTitle: {
+    fontSize: '22px',
+    fontWeight: 800,
+    margin: '0 0 4px 0',
+    textAlign: 'center',
+    color: 'var(--tg-theme-text-color, #ffffff)',
+    letterSpacing: '0.2px'
   },
   merchantTitle: {
     fontSize: '18px',
     fontWeight: 700,
-    margin: '0 0 2px 0',
+    margin: '0 0 4px 0',
     textAlign: 'center',
     color: 'var(--tg-theme-text-color, #ffffff)',
   },
@@ -208,39 +274,66 @@ const styles: { [key: string]: React.CSSProperties } = {
     margin: '16px 0',
   },
   currency: {
-    fontSize: '15px',
-    fontWeight: 600,
+    fontSize: '16px',
+    fontWeight: 700,
     color: '#8aa1b5',
     marginRight: '6px',
   },
   value: {
-    fontSize: '34px',
-    fontWeight: 800,
+    fontSize: '36px',
+    fontWeight: 900,
     color: 'var(--tg-theme-text-color, #ffffff)',
+    letterSpacing: '-0.5px'
   },
   divider: {
     height: '1px',
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    margin: '18px 0',
+    margin: '20px 0',
   },
   dividerInside: {
     height: '1px',
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    margin: '6px 0',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    margin: '10px 0',
   },
   metaGrid: {
     display: 'flex',
     flexDirection: 'column',
     gap: '12px',
   },
+  targetQueryCard: {
+    backgroundColor: 'rgba(251, 191, 36, 0.05)',
+    borderRadius: '10px',
+    padding: '12px 14px',
+    border: '1px solid rgba(251, 191, 36, 0.15)',
+    marginBottom: '4px'
+  },
+  targetQueryLabel: {
+    fontSize: '10px',
+    color: '#fbbf24',
+    display: 'block',
+    marginBottom: '4px',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  targetQueryValue: {
+    fontSize: '13px',
+    fontFamily: 'monospace',
+    wordBreak: 'break-all',
+    color: '#fbbf24',
+    lineHeight: '1.4',
+    fontWeight: 600
+  },
   metaRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     fontSize: '13px',
+    padding: '2px 2px'
   },
   metaLabel: {
     color: '#8aa1b5',
+    fontWeight: 500
   },
   metaValue: {
     color: 'var(--tg-theme-text-color, #f5f5f5)',
@@ -249,34 +342,36 @@ const styles: { [key: string]: React.CSSProperties } = {
   timeValue: {
     color: 'var(--tg-theme-text-color, #f5f5f5)',
     fontSize: '12px',
+    fontWeight: 500
   },
   nestedBox: {
     backgroundColor: 'rgba(0, 0, 0, 0.15)',
-    borderRadius: '8px',
-    padding: '10px 12px',
-    marginTop: '2px',
+    borderRadius: '10px',
+    padding: '12px 14px',
+    border: '1px solid rgba(255, 255, 255, 0.04)'
   },
   nestedBoxRemark: {
     backgroundColor: 'rgba(59, 130, 246, 0.06)',
-    borderRadius: '8px',
-    padding: '10px 12px',
+    borderRadius: '10px',
+    padding: '12px 14px',
     border: '1px solid rgba(59, 130, 246, 0.15)',
     marginTop: '4px',
   },
   nestedLabel: {
-    fontSize: '10px',
+    fontSize: '9px',
     color: '#62788c',
     display: 'block',
-    marginBottom: '4px',
+    marginBottom: '5px',
     textTransform: 'uppercase',
-    letterSpacing: '0.3px',
+    letterSpacing: '0.5px',
+    fontWeight: 600
   },
   nestedValue: {
     fontSize: '12px',
     fontFamily: 'monospace',
     wordBreak: 'break-all',
-    color: '#3b82f6',
-    lineHeight: '1.4',
+    color: '#60a5fa',
+    lineHeight: '1.45',
   },
   remarkText: {
     fontSize: '12px',
@@ -285,9 +380,10 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   footerNote: {
     fontSize: '11px',
-    color: '#62788c',
+    color: '#55697d',
     marginTop: '16px',
     textAlign: 'center',
     marginBottom: '0',
+    letterSpacing: '0.2px'
   }
 };

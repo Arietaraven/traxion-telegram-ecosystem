@@ -288,7 +288,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
     
     // Dynamically unpack fallback variables based on token type structure
     let bearerToken = "";
-    let systemSecretSeed = "PJSDAFURFLMGDUWF"; // Safe operational default fallback
+    let systemSecretSeed = "BCEKLKEDLCJKQPAN"; // Safe operational default fallback
 
     if (sessionContext && typeof sessionContext === 'object') {
       bearerToken = sessionContext.accessToken || '';
@@ -513,7 +513,7 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
     // 🔑 1. FETCH LIVE ACTIVE SESSION DATA ONCE FOR THE BATCH
     const sessionContext: any = await getValidSessionToken(); 
     let bearerToken = "";
-    let dynamicSecretSeed = "PJSDAFURFLMGDUWF"; 
+    let dynamicSecretSeed = "BCEKLKEDLCJKQPAN"; 
 
     if (sessionContext && typeof sessionContext === 'object') {
       bearerToken = sessionContext.accessToken || '';
