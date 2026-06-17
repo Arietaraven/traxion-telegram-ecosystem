@@ -9,17 +9,16 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // 🔒 Use refs to safely keep track of active sync states without triggering rendering loops
+  // 🔒 Refs to safely handle multi-call lockouts without re-triggering component rendering loops
   const isFetchingRef = useRef(false);
   const lastTrackedCodeRef = useRef<string | null>(null);
   const lastTrackedDateRef = useRef<string | null>(null);
 
-  // 📡 CORE DATA ROUTING ENGINE
+  // 📡 BATCH THROTTLED DATA ROUTING ENGINE
   async function fetchLiveLedgerData(forcedCode: string | null, forcedDate: string | null) {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
-    // 🔄 Trigger clean state transitions
     setLoading(true);
     setApiError(null);
 
@@ -33,45 +32,99 @@ export default function App() {
 
     try {
       const targetOrigin = window.location.origin;
-      let response;
 
-      if (/^\d{6}$/.test(forcedCode)) {
-        console.log(`📡 [Frontend Core Sync]: Processing Trace #${forcedCode} (Date: ${forcedDate})`);
-        response = await fetch(`${targetOrigin}/transactions/details/instapay/trace?date=${forcedDate}&traceNumber=${encodeURIComponent(forcedCode)}`, {
-          headers: { 'ngrok-skip-browser-warning': 'true' }
-        });
-      } else {
-        console.log(`📡 [Frontend Core Sync]: Processing Reference Hash: ${forcedCode}`);
-        response = await fetch(`${targetOrigin}/transactions/details/${encodeURIComponent(forcedCode)}`, {
-          headers: { 'ngrok-skip-browser-warning': 'true' }
-        });
+      // Unpack string elements separated by commas back into an individual lookup array
+      const targetsToQuery = forcedCode.includes(',') 
+        ? forcedCode.split(',') 
+        : [forcedCode];
+
+      console.log(`📡 [Frontend Core Sync]: Dispatching sequential lookups for ${targetsToQuery.length} reference targets.`);
+
+      const resolvedList: any[] = [];
+
+      // ⏱️ Anti-Throttle Sequential Looper: Avoids 429 errors from bursting endpoints simultaneously
+      for (const singleTargetCode of targetsToQuery) {
+        const cleanCode = singleTargetCode.trim();
+        if (!cleanCode) continue;
+
+        // Introduce a subtle 150ms delay between fetches to respect Redis/Gateway rate limits
+        if (targetsToQuery.length > 1) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+
+        try {
+          let response;
+          if (/^\d{6}$/.test(cleanCode)) {
+            response = await fetch(`${targetOrigin}/transactions/details/instapay/trace?date=${forcedDate}&traceNumber=${encodeURIComponent(cleanCode)}`, {
+              headers: { 'ngrok-skip-browser-warning': 'true' }
+            });
+          } else {
+            response = await fetch(`${targetOrigin}/transactions/details/${encodeURIComponent(cleanCode)}`, {
+              headers: { 'ngrok-skip-browser-warning': 'true' }
+            });
+          }
+
+          if (!response.ok) {
+            resolvedList.push({ transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 });
+            continue;
+          }
+
+          const rootPayload = await response.json();
+          const workingData = rootPayload.data;
+
+          if (!workingData) {
+            resolvedList.push({ transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 });
+            continue;
+          }
+
+          // 📥 ✨ UNPACK ENTIRE DATA LIST: Extract and normalize collections without losing index entries
+          let itemsBlock: any[] = [];
+          if (Array.isArray(workingData)) {
+            itemsBlock = workingData;
+          } else if (workingData.data && Array.isArray(workingData.data)) {
+            itemsBlock = workingData.data;
+          } else if (workingData.list && Array.isArray(workingData.list)) {
+            itemsBlock = workingData.list;
+          } else {
+            itemsBlock = [workingData];
+          }
+
+          // If the unpacked collection is empty, treat it as a structural lookup drop
+          if (itemsBlock.length === 0) {
+            resolvedList.push({ transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 });
+            continue;
+          }
+
+          // Run evaluation filters over each element inside this clean extracted sub-array block
+          const processedItems = itemsBlock.map((item: any) => {
+            if (!item) return { transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 };
+
+            const txRefString = String(item.transactionReferenceNumber || '');
+            const rawAmt = Number(item.transactionAmount || item.amount || 0);
+            
+            // Mask dummy backend database placeholder objects cleanly
+            if (txRefString.startsWith('FALLBACK-') && rawAmt === 0) {
+              return {
+                ...item,
+                transactionReferenceNumber: cleanCode, 
+                status: 'NOT FOUND', 
+                statusCode: 404
+              };
+            }
+            return item;
+          });
+
+          // 🚀 FIX: Flatten and append the ENTIRE processed array subset into our layout queue stack!
+          resolvedList.push(...processedItems);
+
+        } catch (itemErr) {
+          resolvedList.push({ transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 });
+        }
       }
 
-      if (!response.ok) {
-        throw new Error(`Gateway returned status error code: ${response.status}`);
-      }
-
-      const rootPayload = await response.json();
-      const workingData = rootPayload.data;
-
-      if (!workingData) {
-        throw new Error("No active matching transaction records found in live repository ledger.");
-      }
-
-      let finalizedList: any[] = [];
-      if (Array.isArray(workingData)) {
-        finalizedList = workingData;
-      } else if (workingData.data && Array.isArray(workingData.data)) {
-        finalizedList = workingData.data;
-      } else {
-        finalizedList = [workingData];
-      }
-
-      if (finalizedList.length > 0) {
-        setTransactionsList(finalizedList);
-      } else {
-        throw new Error("No active matching transaction records found in live repository ledger.");
-      }
+      // Filter out any unintended null references from our clean map array list
+      const cleanFinalizedList = resolvedList.filter(item => item !== null);
+      setTransactionsList(cleanFinalizedList);
 
     } catch (err: any) {
       console.error('❌ [API Sync Failure]:', err.message);
@@ -99,7 +152,6 @@ export default function App() {
       }
     }
 
-    // Function to analyze URL query updates natively
     const synchronizeCurrentUrlParams = () => {
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
@@ -109,10 +161,7 @@ export default function App() {
         urlQueryDate = new Date().toISOString().split('T')[0];
       }
 
-      // ✨ PREVENT INFINITE LOOP BLINKING: Only trigger fetch if parameters actually changed
       if (code !== lastTrackedCodeRef.current || urlQueryDate !== lastTrackedDateRef.current) {
-        console.log(`🔄 [Parameter Shift Verified]: Updating from ${lastTrackedCodeRef.current} -> ${code}`);
-        
         lastTrackedCodeRef.current = code;
         lastTrackedDateRef.current = urlQueryDate;
         
@@ -121,25 +170,20 @@ export default function App() {
       }
     };
 
-    // ⚡ Wire up Telegram Native Viewport event listeners
     if (tg) {
       try {
         tg.onEvent('viewportChanged', () => {
-          console.log("⚡ [Telegram UI Viewport Changed]");
           synchronizeCurrentUrlParams();
         });
       } catch (e) {}
     }
 
-    // ⏱️ Safe Polling Loop Interceptor with explicit change guards
     const queryBackupSyncLoop = setInterval(() => {
       synchronizeCurrentUrlParams();
     }, 400);
 
-    // Initial direct invocation run on component mount execution
     synchronizeCurrentUrlParams();
 
-    // 🧹 Clean up hooks to drop interval duplicates on re-renders
     return () => {
       clearInterval(queryBackupSyncLoop);
       if (tg) {
@@ -148,9 +192,13 @@ export default function App() {
         } catch (e) {}
       }
     };
-  }, []); // 💡 Keep array empty! It manages internal variables via safe pointers natively.
+  }, []);
 
+  // Standard short lookups route to single Invoice Views
   const isStandardInvoiceTrace = invoiceCode ? /^\d{6}$/.test(invoiceCode) : true;
+
+  // Intercept if the specific target element represents a missing data frame placeholder item
+  const isExplicitNotFound = transactionsList[0]?.status === 'NOT FOUND' || transactionsList[0]?.statusCode === 404;
 
   return (
     <div style={{
@@ -169,21 +217,28 @@ export default function App() {
       {loading ? (
         <div style={{ color: '#8aa1b5', fontSize: '14px', marginTop: '40vh' }}>🚀 Synchronizing Live Ledger State Matrix...</div>
       ) : transactionsList.length > 0 ? (
-        transactionsList.map((txRecord, idx) => (
-          isStandardInvoiceTrace ? (
+        isExplicitNotFound ? (
+          // Render a clean Transaction Not Found Card Frame
+          <InvoiceDetailView 
+            transaction={transactionsList[0]} 
+            invoiceCode={invoiceCode} 
+          />
+        ) : isStandardInvoiceTrace ? (
+          // 🪐 Renders multiple invoice cards smoothly if multiple matches are bound to this 6-digit trace code!
+          transactionsList.map((txRecord, idx) => (
             <InvoiceDetailView 
               key={txRecord.transactionReferenceNumber || txRecord.referenceId || idx} 
               transaction={txRecord} 
               invoiceCode={invoiceCode} 
             />
-          ) : (
-            <UniversalDetailView 
-              key={txRecord.transactionReferenceNumber || txRecord.referenceId || idx} 
-              transaction={txRecord} 
-              invoiceCode={invoiceCode} 
-            />
-          )
-        ))
+          ))
+        ) : (
+          /* Route down to our bulk universal scrolling list interface */
+          <UniversalDetailView 
+            transactions={transactionsList} 
+            invoiceCode={invoiceCode} 
+          />
+        )
       ) : (
         <div style={{ textAlign: 'center', width: '100%', maxWidth: '400px', marginTop: '20vh' }}>
           <InvoicePlaceholderView invoiceCode={invoiceCode} />
