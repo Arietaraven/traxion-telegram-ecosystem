@@ -17,31 +17,96 @@ export const FaqDetailView: React.FC<FaqProps> = ({ category, keyword, question,
   };
 
   return (
-    <div className="max-w-md mx-auto m-4 bg-white rounded-xl shadow-md overflow-hidden border border-gray-100 font-sans">
-      <div className="p-6">
-        <div className="flex items-center justify-between mb-3">
-          <span className="bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-md font-semibold border border-blue-100">
-            {category.toUpperCase()}
-          </span>
-          <span className="text-xs text-gray-400 font-mono">#{keyword}</span>
-        </div>
+    <div style={{
+      width: '100%',
+      maxWidth: '440px',
+      margin: '0 auto',
+      backgroundColor: 'var(--tg-theme-secondary-bg-color, #24303f)',
+      borderRadius: '12px',
+      border: '1px solid rgba(255, 255, 255, 0.08)',
+      padding: '16px',
+      boxSizing: 'border-box',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      {/* Top Header Row Block */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+        <span style={{
+          backgroundColor: 'rgba(59, 130, 246, 0.15)',
+          color: '#60a5fa',
+          fontSize: '11px',
+          padding: '4px 8px',
+          borderRadius: '6px',
+          fontWeight: 600,
+          letterSpacing: '0.5px',
+          border: '1px solid rgba(59, 130, 246, 0.3)'
+        }}>
+          {category.toUpperCase()}
+        </span>
+        <span style={{ fontSize: '11px', color: '#8aa1b5', fontFamily: 'monospace' }}>
+          #{keyword}
+        </span>
+      </div>
 
-        <h1 className="text-lg font-bold text-gray-900 mb-4">{question}</h1>
-        
-        <div className="relative group">
-          <div className="flex justify-between items-center bg-gray-900 text-gray-300 text-xs px-4 py-2 rounded-t-lg font-mono">
-            <span>Implementation Manual Documentation</span>
-            <button 
-              onClick={handleCopy}
-              className="text-gray-400 hover:text-white transition-colors focus:outline-none"
-            >
-              {copied ? '✅ Copied!' : '📋 Copy Code'}
-            </button>
-          </div>
-          <pre className="bg-gray-950 text-emerald-400 text-xs p-4 rounded-b-lg overflow-x-auto font-mono leading-relaxed whitespace-pre-wrap max-h-96 border-t border-gray-800">
-            <code>{answer}</code>
-          </pre>
+      {/* Main Question Header */}
+      <h1 style={{ 
+        fontSize: '16px', 
+        fontWeight: 'bold', 
+        color: 'var(--tg-theme-text-color, #ffffff)', 
+        margin: '0 0 16px 0',
+        lineHeight: '1.4'
+      }}>
+        {question}
+      </h1>
+      
+      {/* Document Code Container Section */}
+      <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden' }}>
+        {/* Code Block Toolbar Top Bar */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          backgroundColor: '#111827',
+          color: '#9ca3af',
+          fontSize: '11px',
+          padding: '8px 14px',
+          fontFamily: 'monospace',
+          borderBottom: '1px solid #1f2937'
+        }}>
+          <span>Implementation Manual</span>
+          <button 
+            onClick={handleCopy}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: copied ? '#34d399' : '#9ca3af',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontFamily: 'inherit',
+              transition: 'color 0.2s ease',
+              outline: 'none',
+              fontWeight: 'bold'
+            }}
+          >
+            {copied ? '✅ Copied!' : '📋 Copy Code'}
+          </button>
         </div>
+        
+        {/* Preformatted Code Field Screen */}
+        <pre style={{
+          backgroundColor: '#030712',
+          color: '#34d399',
+          fontSize: '12px',
+          padding: '14px',
+          margin: 0,
+          overflowX: 'auto',
+          fontFamily: 'Consolas, Monaco, "Andale Mono", monospace',
+          lineHeight: '1.6',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          maxHeight: '320px'
+        }}>
+          <code>{answer}</code>
+        </pre>
       </div>
     </div>
   );

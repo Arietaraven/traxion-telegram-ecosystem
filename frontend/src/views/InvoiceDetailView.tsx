@@ -75,7 +75,7 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
   const rawFeeInput = transaction?.transactionFee || 0;
   const feeAmount = (typeof rawFeeInput === 'string' ? parseFloat(rawFeeInput) : Number(rawFeeInput)) / 100;
 
-  const totalDisplay = rawAmount + feeAmount;
+  const totalDisplay = rawAmount;
 
   const dateCreated = transaction?.dateTimeCreated || transaction?.created_at || new Date().toISOString();
   const dateUpdated = transaction?.dateTimeStatusUpdated || dateCreated;
