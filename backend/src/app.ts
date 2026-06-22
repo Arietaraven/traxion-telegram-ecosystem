@@ -5,11 +5,15 @@ import dotenv from 'dotenv';
 import axios from 'axios';
 import path from 'path'; 
 import CryptoJS from 'crypto-js';
+import { google } from 'googleapis';
 import base32Decode from 'base32-decode';
+import { createWorker } from 'tesseract.js';
 import { Telegraf, Markup } from 'telegraf';
 import { db } from '../src/config/database';
 import { redis } from '../src/config/redis';
+import { HARDCODED_FAQS } from './constants/faqData';
 import { getMainMenu } from './telegram/menu';
+import { initAdvisoryCron } from './workers/advisorySync';
 import { checkRateLimit } from './middlewares/rateLimiter';
 
 // 🚀 FIXED PATH DIRECTIVE: Looks inside the backend folder container dynamically
@@ -34,26 +38,30 @@ app.use(cors());
 app.use(express.json());
 
 // =========================================================================
-// 🚀 UNIFIED FRONTEND INTERFACE MATRIX (PRODUCTION DIST ENGINE - RUNNING CLEAN)
+// 🚀 UNIFIED FRONTEND INTERFACE MATRIX (PRODUCTION DIST ENGINE)
 // =========================================================================
 
 // Resolve the absolute path to your newly compiled frontend/dist folder
 const frontendDistPath = path.resolve(__dirname, '..', '..', 'frontend', 'dist');
 
-// 1. Tell Express to automatically host all nested compiled script/style bundles
+// Start the background cron sync service immediately on application boot
+initAdvisoryCron();
+console.log('⚙️ Background task processing runners active.');
+
+// Tell Express to automatically host all nested compiled script/style bundles
 app.use('/app', express.static(frontendDistPath));
 app.use(express.static(frontendDistPath));
 
-// 2. Main Document Route: Serves the compiled index.html file with production links natively
+// Main Document Route: Serves the compiled index.html file with production links natively
 app.get(['/app', '/app/'], (req, res) => {
-  const productionIndexPath = path.join(frontendDistPath, 'index.html');
-  
-  if (fs.existsSync(productionIndexPath)) {
-    res.sendFile(productionIndexPath);
-  } else {
-    console.error('❌ [Critical Asset Error]: dist/index.html is missing. Run npx vite build in frontend directory!');
-    res.status(500).send('🔄 Syncing server layouts... Please close and retry in a few seconds.');
-  }
+  const productionIndexPath = path.join(frontendDistPath, 'index.html');
+  
+  if (fs.existsSync(productionIndexPath)) {
+    res.sendFile(productionIndexPath);
+  } else {
+    console.error('❌ [Critical Asset Error]: dist/index.html is missing. Run npx vite build in frontend directory!');
+    res.status(500).send('🔄 Syncing server layouts... Please close and retry in a few seconds.');
+  }
 });
 
 // =========================================================================
@@ -61,49 +69,49 @@ app.get(['/app', '/app/'], (req, res) => {
 // =========================================================================
 
 const wordBufferStringify = (wordArray: any): Uint8Array => {
-  const words = wordArray.words;
-  const sigBytes = wordArray.sigBytes;
-  const u8 = new Uint8Array(sigBytes);
-  for (let i = 0; i < sigBytes; i++) {
-    u8[i] = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
-  }
-  return u8;
+  const words = wordArray.words;
+  const sigBytes = wordArray.sigBytes;
+  const u8 = new Uint8Array(sigBytes);
+  for (let i = 0; i < sigBytes; i++) {
+    u8[i] = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
+  }
+  return u8;
 };
 
 const wordBufferParse = (u8arr: Uint8Array): any => {
-  const len = u8arr.length;
-  const words: number[] = [];
-  for (let i = 0; i < len; i++) {
-    words[i >>> 2] |= (u8arr[i] & 0xff) << (24 - (i % 4) * 8);
-  }
-  return CryptoJS.lib.WordArray.create(words, len);
+  const len = u8arr.length;
+  const words: number[] = [];
+  for (let i = 0; i < len; i++) {
+    words[i >>> 2] |= (u8arr[i] & 0xff) << (24 - (i % 4) * 8);
+  }
+  return CryptoJS.lib.WordArray.create(words, len);
 };
 
 /**
- * Generates the live 6-digit rolling TOTP code matching Postman's cryptographic engine exactly
- */
+ * Generates the live 6-digit rolling TOTP code matching Postman's cryptographic engine exactly
+ */
 function generateRollingTOTP(secretKey: string, customTimestamp: number): string {
-  const timeSec = Math.floor(customTimestamp / 1000);
-  const intervalHex = Math.floor(timeSec / 30).toString(16).padStart(16, "0");
-  
-  // Base32 Decodes the key using standard RFC4648 structure parameters
-  const decodedRaw = base32Decode(secretKey, 'RFC4648');
-  const decodedBytes = new Uint8Array(decodedRaw);
-  
-  const parsedInterval = CryptoJS.enc.Hex.parse(intervalHex);
-  const parsedSecret = wordBufferParse(decodedBytes);
-  
-  const hmacDigestBytes = CryptoJS.HmacSHA1(parsedInterval, parsedSecret);
-  const digest = wordBufferStringify(hmacDigestBytes);
-  
-  const offset = digest[19] & 0xf;
-  const binaryValue =
-    ((digest[offset] & 0x7f) << 24) +
-    (digest[offset + 1] << 16) +
-    (digest[offset + 2] << 8) +
-    (digest[offset + 3]);
-    
-  return (binaryValue % 1000000).toString().padStart(6, "0");
+  const timeSec = Math.floor(customTimestamp / 1000);
+  const intervalHex = Math.floor(timeSec / 30).toString(16).padStart(16, "0");
+  
+  // Base32 Decodes the key using standard RFC4648 structure parameters
+  const decodedRaw = base32Decode(secretKey, 'RFC4648');
+  const decodedBytes = new Uint8Array(decodedRaw);
+  
+  const parsedInterval = CryptoJS.enc.Hex.parse(intervalHex);
+  const parsedSecret = wordBufferParse(decodedBytes);
+  
+  const hmacDigestBytes = CryptoJS.HmacSHA1(parsedInterval, parsedSecret);
+  const digest = wordBufferStringify(hmacDigestBytes);
+  
+  const offset = digest[19] & 0xf;
+  const binaryValue =
+    ((digest[offset] & 0x7f) << 24) +
+    (digest[offset + 1] << 16) +
+    (digest[offset + 2] << 8) +
+    (digest[offset + 3]);
+    
+  return (binaryValue % 1000000).toString().padStart(6, "0");
 }
 
 // =========================================================================
@@ -168,7 +176,7 @@ async function getValidSessionToken(): Promise<{ accessToken: string; secretKey:
 
     if (cleanJsonResponse && cleanJsonResponse.code == '220022' && cleanJsonResponse.data?.accessToken) {
       const freshToken = cleanJsonResponse.data.accessToken;
-      const freshSecret = cleanJsonResponse.data.secretKey || "BCEKLKEDLCJKQPAN"; // 🎯 Extracts directly from your live payload logs
+      const freshSecret = cleanJsonResponse.data.secretKey || "BCEKLKEDLCJKQPAN"; 
 
       // Cache both fields together cleanly in Redis memory
       await redis.setex(REDIS_TOKEN_KEY, 2700, freshToken);
@@ -198,9 +206,6 @@ async function getValidSessionToken(): Promise<{ accessToken: string; secretKey:
   }
 }
 
-/**
- * 🛰️ Postman API Route B: Direct Instapay Trace Scanner Module (Adaptive Production Core)
- */
 /**
  * 🛰️ Postman API Route B: Direct Instapay Trace Scanner Module (Adaptive Production Core)
  */
@@ -242,6 +247,19 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
         code: 200000,
         message: "Transaction details fetched successfully.",
         data: mappedCollection
+      });
+    }
+
+    // 🛡️ NEW OPTIMIZATION STEP: Guard against known invalid reference attacks
+    const redisNegativeCacheKey = `negative:txn:${traceNumber}`;
+    const isKnownInvalid = await redis.get(redisNegativeCacheKey);
+    
+    if (isKnownInvalid === 'NOT_FOUND') {
+      console.log(`🛡️ [Redis Guard Hit]: Blocking expensive lookup for known invalid trace: ${traceNumber}`);
+      return res.status(404).json({
+        code: 404000,
+        message: "No active transaction records found matching this explicit lookup parameters matrix across production servers. (Cached Rejection)",
+        data: []
       });
     }
 
@@ -312,10 +330,10 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
           
           let plainTextJsonString = "";
 
-          // 🎯 Setup our seed arrays dynamically including our auto-fetched token seed
+          // Setup our seed arrays dynamically including our auto-fetched token seed
           const secretSeedsToTry = [systemSecretSeed, "EWSXREMVLJHWXJXU"]; 
 
-          // 🎯 BUILD THE SATURATED TIMESTAMPS MATRIX ARRAY
+          // BUILD THE SATURATED TIMESTAMPS MATRIX ARRAY
           const candidateTimes: number[] = [];
 
           if (serverResponseTimestamp) {
@@ -380,9 +398,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
           }
         }
 
-        // =========================================================================
-        // 📥 ✨ THE ADAPTIVE EXTRACTION ENGINE MATRIX (UNWRAPS NESTED LISTS & OBJECTS)
-        // =========================================================================
+        // Unwrap and map results
         let innerDataBlock = payloadData?.data;
 
         if (innerDataBlock) {
@@ -410,7 +426,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
       }
     }
 
-    // 📝 PHASE 4: SAFE MULTI-RECORD DATABASE CACHE PERSISTENCE
+    // MULTI-RECORD DATABASE CACHE PERSISTENCE
     if (extractedTransactionsList.length > 0) {
       console.log(`📝 [Database Writer Engine]: Caching ${extractedTransactionsList.length} production records into local PostgreSQL.`);
       
@@ -460,6 +476,10 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
 
     } else {
       console.warn(`⚠️ [Backend Security Sync]: Production API returned no matching collection structures for trace: ${traceNumber}`);
+      
+      // 🛡️ MEMORY WRITE PATCH: Tell Redis to register this key rejection footprint for 5 minutes
+      await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
+
       return res.status(404).json({
         code: 404000,
         message: "No active transaction records found matching this explicit lookup parameters matrix across production servers.",
@@ -473,9 +493,6 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
   }
 });
 
-/**
- * 🛰️ Postman API Route A: Universal Wildcard Reference Search Router with Auto-Save Cache
- */
 // =========================================================================
 // 🛰️ Postman API Route A: Universal Wildcard Reference Search Router
 // =========================================================================
@@ -486,7 +503,6 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
 
   const { referenceId } = req.params;
   
-  // ✂️ Split reference input by commas to extract every item requested safely
   const referenceList = String(referenceId)
     .split(',')
     .map(id => id.trim())
@@ -496,143 +512,200 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
     return res.status(400).json({ code: 400000, message: "No valid reference keys targeted.", data: [] });
   }
 
+  // 🛡️ NEW OPTIMIZATION STEP: Intercept and filter the batch queue to strip out entries already flagged as invalid in Redis
+  const verifiedReferenceQueue: string[] = [];
   const batchResultsCollection: any[] = [];
 
-  try {
-    // 🔑 1. FETCH LIVE ACTIVE SESSION DATA ONCE FOR THE BATCH
-    const sessionContext: any = await getValidSessionToken(); 
+  for (const ref of referenceList) {
+    const redisNegativeCacheKey = `negative:txn:${ref}`;
+    const isKnownInvalid = await redis.get(redisNegativeCacheKey);
     
-    // Safely unpack session tokens without crashing or re-declaring block scopes
+    if (isKnownInvalid === 'NOT_FOUND') {
+      console.log(`🛡️ [Redis Guard Hit]: Dropping known invalid item from active search processing queue: ${ref}`);
+      batchResultsCollection.push({
+        transactionReferenceNumber: ref,
+        integratorReferenceNumber: '---',
+        aggregatorReferenceNumber: '---',
+        transactionAmount: 0,
+        transactionFee: 0,
+        status: -1,
+        remarks: "Reference target entry not identified inside ledger streams. (Cached Rejection)",
+        description: "Failed Lookup Entry",
+        dateTimeCreated: new Date().toISOString(),
+        dateTimeStatusUpdated: new Date().toISOString()
+      });
+    } else {
+      verifiedReferenceQueue.push(ref);
+    }
+  }
+
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  try {
+    const sessionContext: any = await getValidSessionToken(); 
     const bearerToken = (typeof sessionContext === 'object' ? sessionContext.accessToken : sessionContext) || "";
     const dynamicSecretSeed = (typeof sessionContext === 'object' && sessionContext.secretKey) ? sessionContext.secretKey : "BCEKLKEDLCJKQPAN";
 
-    // Process every tracking ID found in the input message parameters
-    for (const cleanReferenceId of referenceList) {
-      try {
-        const productionResponse = await axios.get(`${TRAXION_BASE_URL}/transactions/details/${encodeURIComponent(cleanReferenceId)}`, {
-          headers: {
-            'Authorization': `Bearer ${bearerToken}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
+    // Loop exclusively through verified valid items remaining in the execution queue
+    for (const cleanReferenceId of verifiedReferenceQueue) {
+      const redisNegativeCacheKey = `negative:txn:${cleanReferenceId}`;
+      let retryCount = 0;
+      const maxRetries = 3;
+      let successfullyProcessedItem = false;
+
+      while (retryCount < maxRetries && !successfullyProcessedItem) {
+        try {
+          await delay(250);
+
+          const productionResponse = await axios.get(`${TRAXION_BASE_URL}/transactions/details/${encodeURIComponent(cleanReferenceId)}`, {
+            headers: {
+              'Authorization': `Bearer ${bearerToken}`,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            validateStatus: (status) => (status >= 200 && status < 300) || status === 429
+          });
+
+          if (productionResponse.status === 429) {
+            retryCount++;
+            const backoffTime = retryCount * 500; 
+            console.warn(`⚠️ [Batch Rate Limit]: HTTP 429 on reference ${cleanReferenceId}. Cooling down for ${backoffTime}ms...`);
+            await delay(backoffTime);
+            continue; 
           }
-        });
 
-        let payloadData = productionResponse.data;
-        const serverResponseTimestamp = productionResponse.headers['x-server-timestamp'] || productionResponse.headers['X-Server-Timestamp'];
+          let payloadData = productionResponse.data;
+          const serverResponseTimestamp = productionResponse.headers['x-server-timestamp'] || productionResponse.headers['X-Server-Timestamp'];
 
-        // 🔓 Automated Decryption Routine with Dynamic Key Matrices
-        if (payloadData && typeof payloadData.data === 'string') {
-          let cleanCiphertext = payloadData.data.trim();
+          if (payloadData && typeof payloadData.data === 'string') {
+            let cleanCiphertext = payloadData.data.trim();
 
-          if (cleanCiphertext.startsWith('"') && cleanCiphertext.endsWith('"')) {
-            cleanCiphertext = cleanCiphertext.substring(1, cleanCiphertext.length - 1);
-          }
-
-          if (cleanCiphertext.includes('U2FsdGVkX1')) {
-            let plainTextJsonString = "";
-            const candidateTimes: number[] = [];
-            
-            if (serverResponseTimestamp) {
-              candidateTimes.push(Number(serverResponseTimestamp));
+            if (cleanCiphertext.startsWith('"') && cleanCiphertext.endsWith('"')) {
+              cleanCiphertext = cleanCiphertext.substring(1, cleanCiphertext.length - 1);
             }
-            
-            if (cleanReferenceId.length >= 8) {
-              const year = parseInt(cleanReferenceId.substring(0, 4), 10);
-              const month = parseInt(cleanReferenceId.substring(4, 6), 10) - 1;
-              const day = parseInt(cleanReferenceId.substring(6, 8), 10);
+
+            if (cleanCiphertext.includes('U2FsdGVkX1')) {
+              let plainTextJsonString = "";
+              const candidateTimes: number[] = [];
               
-              if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
-                candidateTimes.push(new Date(Date.UTC(year, month, day, 12, 0, 0)).getTime());
-                candidateTimes.push(new Date(Date.UTC(year, month, day - 1, 12, 0, 0)).getTime());
-                candidateTimes.push(new Date(Date.UTC(year, month, day - 1, 16, 0, 0)).getTime());
+              if (serverResponseTimestamp) {
+                candidateTimes.push(Number(serverResponseTimestamp));
               }
-            }
-            
-            candidateTimes.push(Date.now());
-
-            const comprehensiveTimeMatrix: number[] = [];
-            for (const baseTime of candidateTimes) {
-              comprehensiveTimeMatrix.push(baseTime, baseTime - 1000, baseTime + 1000);
-            }
-
-            for (const targetTimestamp of comprehensiveTimeMatrix) {
-              try {
-                const calculatedDecryptionOtp = generateRollingTOTP(dynamicSecretSeed, targetTimestamp);
-                const bytesDecrypted = CryptoJS.AES.decrypt(cleanCiphertext, calculatedDecryptionOtp);
-                const testString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
+              
+              if (cleanReferenceId.length >= 8) {
+                const year = parseInt(cleanReferenceId.substring(0, 4), 10);
+                const month = parseInt(cleanReferenceId.substring(4, 6), 10) - 1;
+                const day = parseInt(cleanReferenceId.substring(6, 8), 10);
                 
-                if (testString && testString.trim().length > 0) {
-                  plainTextJsonString = testString;
-                  console.log(`🔓 [Crypto Engine Sync]: Decryption success via epoch offset: ${targetTimestamp}`);
-                  break;
+                if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+                  candidateTimes.push(new Date(Date.UTC(year, month, day, 12, 0, 0)).getTime());
+                  candidateTimes.push(new Date(Date.UTC(year, month, day - 1, 12, 0, 0)).getTime());
+                  candidateTimes.push(new Date(Date.UTC(year, month, day - 1, 16, 0, 0)).getTime());
                 }
-              } catch (innerCryptoErr) {
-                // Check next timestamp offset
+              }
+              
+              candidateTimes.push(Date.now());
+
+              const comprehensiveTimeMatrix: number[] = [];
+              for (const baseTime of candidateTimes) {
+                comprehensiveTimeMatrix.push(baseTime, baseTime - 1000, baseTime + 1000);
+              }
+
+              for (const targetTimestamp of comprehensiveTimeMatrix) {
+                try {
+                  const calculatedDecryptionOtp = generateRollingTOTP(dynamicSecretSeed, targetTimestamp);
+                  const bytesDecrypted = CryptoJS.AES.decrypt(cleanCiphertext, calculatedDecryptionOtp);
+                  const testString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
+                  
+                  if (testString && testString.trim().length > 0) {
+                    plainTextJsonString = testString;
+                    console.log(`🔓 [Crypto Engine Sync]: Decryption success via epoch offset: ${targetTimestamp}`);
+                    break;
+                  }
+                } catch (innerCryptoErr) {
+                  // Check next timestamp offset
+                }
+              }
+              
+              if (plainTextJsonString) {
+                payloadData.data = JSON.parse(plainTextJsonString);
+              } else {
+                throw new Error("Dynamic key window desynchronization. Decrypted bytes rejected.");
               }
             }
-            
-            if (plainTextJsonString) {
-              payloadData.data = JSON.parse(plainTextJsonString);
-            } else {
-              throw new Error("Dynamic key window desynchronization. Decrypted bytes rejected.");
+          }
+
+          let innerDataBlock = payloadData?.data;
+          let rawItemsArray: any[] = [];
+
+          if (innerDataBlock) {
+            if (Array.isArray(innerDataBlock)) {
+              rawItemsArray = innerDataBlock;
+            } else if (innerDataBlock.list && Array.isArray(innerDataBlock.list)) {
+              rawItemsArray = innerDataBlock.list;
+            } else if (innerDataBlock.data) {
+              rawItemsArray = Array.isArray(innerDataBlock.data) ? innerDataBlock.data : [innerDataBlock.data];
+            } else if (typeof innerDataBlock === 'object') {
+              rawItemsArray = [innerDataBlock];
             }
           }
-        }
 
-        // =========================================================================
-        // 📥 🔄 MULTI-ITEM ADAPTIVE EXTRACTION MATRIX (RETAIN DUPLICATES)
-        // =========================================================================
-        let innerDataBlock = payloadData?.data;
-        let rawItemsArray: any[] = [];
+          if (rawItemsArray.length > 0) {
+            rawItemsArray.forEach((extractedItem: any) => {
+              const incomingAmount = extractedItem.transactionAmount ?? extractedItem.amount ?? 0;
+              const incomingFee = extractedItem.transactionFee ?? extractedItem.fee ?? 0;
 
-        if (innerDataBlock) {
-          if (Array.isArray(innerDataBlock)) {
-            rawItemsArray = innerDataBlock;
-          } else if (innerDataBlock.list && Array.isArray(innerDataBlock.list)) {
-            rawItemsArray = innerDataBlock.list;
-          } else if (innerDataBlock.data) {
-            rawItemsArray = Array.isArray(innerDataBlock.data) ? innerDataBlock.data : [innerDataBlock.data];
-          } else if (typeof innerDataBlock === 'object') {
-            rawItemsArray = [innerDataBlock];
+              const finalAmountPeso = parseFloat(String(incomingAmount));
+              const finalFeePeso = parseFloat(String(incomingFee));
+
+              let normalStatus = 0;
+              const checkStr = String(extractedItem.status ?? '').toUpperCase();
+              
+              if (checkStr === '1' || checkStr === 'SUCCESSFUL' || checkStr === 'SUCCESS' || checkStr === 'PAID') {
+                normalStatus = 1;
+              } else if (checkStr === '-1' || checkStr === 'FAILED' || checkStr === 'DECLINED') {
+                normalStatus = -1;
+              }
+
+              batchResultsCollection.push({
+                transactionReferenceNumber: extractedItem.transactionReferenceNumber || extractedItem.referenceId || cleanReferenceId,
+                integratorReferenceNumber: extractedItem.integratorReferenceNumber || '---',
+                aggregatorReferenceNumber: extractedItem.aggregatorReferenceSegment || extractedItem.aggregatorReferenceNumber || '---',
+                transactionAmount: isNaN(finalAmountPeso) ? 0 : finalAmountPeso,
+                transactionFee: isNaN(finalFeePeso) ? 0 : finalFeePeso,
+                status: normalStatus,
+                remarks: extractedItem.remarks || extractedItem.description || null,
+                description: extractedItem.description || extractedItem.remarks || 'Universal Ledger Registry Query',
+                dateTimeCreated: extractedItem.dateTimeCreated || extractedItem.created_at || new Date().toISOString(),
+                dateTimeStatusUpdated: extractedItem.dateTimeStatusUpdated || extractedItem.updated_at || new Date().toISOString()
+              });
+            });
+          } else {
+            // 🛡️ MEMORY WRITE PATCH: If API responds but contains an empty record structure, register rejection footprints
+            await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
+
+            batchResultsCollection.push({
+              transactionReferenceNumber: cleanReferenceId,
+              integratorReferenceNumber: '---',
+              aggregatorReferenceNumber: '---',
+              transactionAmount: 0,
+              transactionFee: 0,
+              status: -1,
+              remarks: "Reference target entry not identified inside ledger streams.",
+              description: "Failed Lookup Entry",
+              dateTimeCreated: new Date().toISOString(),
+              dateTimeStatusUpdated: new Date().toISOString()
+            });
           }
-        }
 
-        // =========================================================================
-        // ₱ ✨ DATA UNIFICATION & MAPPING LAYER (MAPPED FOR ALL DETECTED DUPLICATES)
-        // =========================================================================
-        if (rawItemsArray.length > 0) {
-        rawItemsArray.forEach((extractedItem: any) => {
-        const incomingAmount = extractedItem.transactionAmount ?? extractedItem.amount ?? 0;
-        const incomingFee = extractedItem.transactionFee ?? extractedItem.fee ?? 0;
+          successfullyProcessedItem = true; 
 
-        const finalAmountPeso = parseFloat(String(incomingAmount));
-        const finalFeePeso = parseFloat(String(incomingFee));
+        } catch (singleLoopErr: any) {
+          console.warn(`⚠️ Batch row skip exception handled for index: ${cleanReferenceId} -> ${singleLoopErr.message}`);
+          
+          // 🛡️ MEMORY WRITE PATCH: If network throws errors or decryption breaks, log as non-existent to avoid infinite retries
+          await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
 
-        // Explicitly normalize status fields directly to standard numeric modes
-        let normalStatus = 0; // default to pending
-        const checkStr = String(extractedItem.status ?? '').toUpperCase();
-        
-        if (checkStr === '1' || checkStr === 'SUCCESSFUL' || checkStr === 'SUCCESS' || checkStr === 'PAID') {
-            normalStatus = 1;
-        } else if (checkStr === '-1' || checkStr === 'FAILED' || checkStr === 'DECLINED') {
-            normalStatus = -1;
-        }
-
-        batchResultsCollection.push({
-            transactionReferenceNumber: extractedItem.transactionReferenceNumber || extractedItem.referenceId || cleanReferenceId,
-            integratorReferenceNumber: extractedItem.integratorReferenceNumber || '---',
-            aggregatorReferenceNumber: extractedItem.aggregatorReferenceSegment || extractedItem.aggregatorReferenceNumber || '---',
-            transactionAmount: isNaN(finalAmountPeso) ? 0 : finalAmountPeso,
-            transactionFee: isNaN(finalFeePeso) ? 0 : finalFeePeso,
-            status: normalStatus, // Ensure this is 1, 0, or -1 explicitly
-            remarks: extractedItem.remarks || extractedItem.description || null,
-            description: extractedItem.description || extractedItem.remarks || 'Universal Ledger Registry Query',
-            dateTimeCreated: extractedItem.dateTimeCreated || extractedItem.created_at || new Date().toISOString(),
-            dateTimeStatusUpdated: extractedItem.dateTimeStatusUpdated || extractedItem.updated_at || new Date().toISOString()
-        });
-        });
-        } else {
-          // Push failed lookup item card context placeholder
           batchResultsCollection.push({
             transactionReferenceNumber: cleanReferenceId,
             integratorReferenceNumber: '---',
@@ -640,27 +713,14 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
             transactionAmount: 0,
             transactionFee: 0,
             status: -1,
-            remarks: "Reference target entry not identified inside ledger streams.",
-            description: "Failed Lookup Entry",
+            remarks: singleLoopErr.message || "Failed execution pipeline runtime error.",
+            description: "Exception Record",
             dateTimeCreated: new Date().toISOString(),
             dateTimeStatusUpdated: new Date().toISOString()
           });
+          successfullyProcessedItem = true; 
         }
-      } catch (singleLoopErr: any) {
-        console.warn(`⚠️ Batch row skip exception handled for index: ${cleanReferenceId} -> ${singleLoopErr.message}`);
-        batchResultsCollection.push({
-          transactionReferenceNumber: cleanReferenceId,
-          integratorReferenceNumber: '---',
-          aggregatorReferenceNumber: '---',
-          transactionAmount: 0,
-          transactionFee: 0,
-          status: -1,
-          remarks: singleLoopErr.message || "Failed execution pipeline runtime error.",
-          description: "Exception Record",
-          dateTimeCreated: new Date().toISOString(),
-          dateTimeStatusUpdated: new Date().toISOString()
-        });
-      }
+      } 
     }
 
     return res.json({
@@ -680,18 +740,15 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
   }
 });
 
-
 // =========================================================================
-// 🛰️ Postman API Route C: Single FAQ Record Detail Fetcher
+// 🛰️ Postman API Route C: Single FAQ Record Detail Fetcher (⚡ HARDCODED ENGINE)
 // =========================================================================
 app.get('/api/faqs/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    // 🧼 Force-trim and strip out hidden Windows carriage returns (\r) or newlines (\n)
     const cleanIdString = String(id).replace(/[\r\n]/g, '').trim();
     const cleanId = parseInt(cleanIdString, 10);
 
-    // 🛑 Early exit check if the resulting sanitized entity fails to represent a true number
     if (isNaN(cleanId)) {
       return res.status(400).json({ 
         code: 400000, 
@@ -699,17 +756,21 @@ app.get('/api/faqs/:id', async (req, res) => {
       });
     }
 
-    // 🔍 Query the database using the safe, cleaned cleanId integer
-    const result = await db.query('SELECT category, keyword, question, answer FROM faqs WHERE id = $1', [cleanId]);
+    const matchedFaq = HARDCODED_FAQS.find(faq => faq.id === cleanId);
     
-    if (result.rows.length === 0) {
+    if (!matchedFaq) {
       return res.status(404).json({ code: 404000, message: "FAQ record not found." });
     }
 
     return res.json({
       code: 200000,
-      message: "FAQ retrieved successfully.",
-      data: result.rows[0]
+      message: "FAQ retrieved successfully from static data cache structure.",
+      data: {
+        category: matchedFaq.category,
+        keyword: matchedFaq.keyword,
+        question: matchedFaq.question,
+        answer: matchedFaq.answer
+      }
     });
   } catch (err: any) {
     console.error('❌ [FAQ API Failure]:', err.message);
@@ -719,75 +780,178 @@ app.get('/api/faqs/:id', async (req, res) => {
 
 // Base API healthcheck endpoint
 app.get('/health', async (req, res) => {
-  try {
-    await db.query('SELECT 1');
-    const redisPing = await redis.ping();
-    res.status(200).json({
-      status: 'healthy',
-      timestamp: new Date(),
-      services: { postgres: 'connected', redis: redisPing === 'PONG' ? 'connected' : 'disconnected' }
-    });
-  } catch (error: any) {
-    res.status(500).json({ status: 'unhealthy', error: error.message });
-  }
+  try {
+    await db.query('SELECT 1');
+    const redisPing = await redis.ping();
+    res.status(200).json({
+      status: 'healthy',
+      timestamp: new Date(),
+      services: { postgres: 'connected', redis: redisPing === 'PONG' ? 'connected' : 'disconnected' }
+    });
+  } catch (error: any) {
+    res.status(500).json({ status: 'unhealthy', error: error.message });
+  }
 });
 
 // Initialize the Telegram Bot Engine
 if (!BOT_TOKEN) {
-  console.error('❌ [Telegraf]: Core initialization failed. TELEGRAM_BOT_TOKEN is missing in .env');
+  console.error('❌ [Telegraf]: Core initialization failed. TELEGRAM_BOT_TOKEN is missing in .env');
 } else {
-  const bot = new Telegraf(BOT_TOKEN);
+  const bot = new Telegraf(BOT_TOKEN);
 
-  bot.start((ctx) => {
-    ctx.reply(
-      `👋 Welcome to Traxion Ecosystem Hub, ${ctx.from.first_name || 'Merchant'}!\n\nUse the menu buttons below to navigate systems, lookup details, or explore integrations.`,
-      getMainMenu()
-    );
-  });
+  bot.start((ctx) => {
+    ctx.reply(
+      `👋 Welcome to Traxion Ecosystem Hub, ${ctx.from.first_name || 'Merchant'}!\n\nUse the menu buttons below to navigate systems, lookup details, or explore integrations.`,
+      getMainMenu()
+    );
+  });
 
-  bot.action('menu_advisories', async (ctx) => {
-    try {
-      await ctx.answerCbQuery();
-      const result = await db.query(
-        `SELECT title, description, status FROM advisories WHERE event_date >= NOW() - INTERVAL '7 days' AND event_date <= NOW() + INTERVAL '7 days' ORDER BY event_date ASC`
-      );
-      if (result.rows.length === 0) {
-        return ctx.reply('📢 **System Status**: No active or scheduled system advisories detected within this 14-day window.');
-      }
-      let responseMessage = '📢 **Traxion System Advisories (14-Day Window)**\n\n';
-      result.rows.forEach((row: any) => {
-        const statusEmoji = row.status === 'Active' ? '🔴' : row.status === 'Done' ? '🟢' : '🟡';
-        responseMessage += `${statusEmoji} **${row.title}** (${row.status})\n${row.description}\n\n`;
-      });
-      ctx.reply(responseMessage);
-    } catch (err: any) {
-      console.error('Advisory Fetch Error:', err.message);
-      ctx.reply('❌ Unable to pull advisory updates at the moment.');
-    }
-  });
-
-bot.action('menu_faqs', async (ctx) => {
+  // =========================================================================
+  // 📢 LIGHTWEIGHT BOT ADVISORY HANDLER (DB-Only Query Engine)
+  // =========================================================================/
+  bot.action('menu_advisories', async (ctx) => {
     try {
       await ctx.answerCbQuery();
       
-      // 🔍 Fetch top categories and keywords directly from your PostgreSQL table
-      const result = await db.query('SELECT id, category, keyword FROM faqs ORDER BY id ASC LIMIT 30');
-      
-      if (result.rows.length === 0) {
-        return ctx.reply('💡 **Knowledge Base**: No documentation matrices found in the ledger subsystem.');
+      const temporaryStatusMessage = await ctx.reply('🔄 _Syncing Traxion timeline data via database matrix cache..._', { parse_mode: 'Markdown' });
+
+      // ⚡ SUPER SPEED: Simple raw textual lookups against your cron-populated database cache table
+      const cachedAdvisories = await db.query('SELECT * FROM advisories ORDER BY created_at DESC LIMIT 15');
+
+      if (cachedAdvisories.rows.length === 0) {
+        try { await ctx.telegram.deleteMessage(ctx.chat!.id, temporaryStatusMessage.message_id); } catch (e) {}
+        return ctx.reply('📢 **System Status**: All core services operational. No active advisories logged.');
       }
 
+      const now = new Date();
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const sevenDaysAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const todayAnchor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      const mediaGroupItems: any[] = [];
+      let summaryReportText = `📢 **Traxion Pay Advisory Summary Matrix**\n_Live automated timeline phase analysis active._\n\n`;
+      
+      const processedTextsLog = new Set<string>();
+      let upcomingCount = 0;
+      let ongoingCount = 0;
+      let doneCount = 0;
+
+      for (const row of cachedAdvisories.rows) {
+        const fullDetectedText = row.extracted_text;
+        const lowerText = fullDetectedText.toLowerCase();
+
+        // Filter out non-maintenance items
+        const isStandardMaintenanceAdvisory = lowerText.includes('maintenance') || lowerText.includes('scheduled');
+        if (!isStandardMaintenanceAdvisory) continue;
+
+        // Content Deduplicator check across multiple rows
+        const normalizedContentKey = lowerText.replace(/[^a-z0-9]/g, '').substring(0, 150);
+        if (processedTextsLog.has(normalizedContentKey)) continue;
+        processedTextsLog.add(normalizedContentKey);
+
+        // Date Parsing Engine
+        const dateRegex = /(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:\s*,\s*)\d{4}|\d{4}-\d{2}-\d{2}/gi;
+        const rawMatches = fullDetectedText.match(dateRegex);
+
+        let processedDates: string[] = [];
+        if (rawMatches && rawMatches.length > 0) {
+          processedDates = rawMatches.map((d: string) => d.replace(/\s*,\s*/, ', '));
+        }
+
+        let advisoryTargetDate = todayAnchor; 
+        if (processedDates.length > 0) {
+          const parsedDate = new Date(processedDates[processedDates.length - 1]);
+          advisoryTargetDate = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate());
+        } else if (row.created_at) {
+          const fallbackDate = new Date(row.created_at);
+          advisoryTargetDate = new Date(fallbackDate.getFullYear(), fallbackDate.getMonth(), fallbackDate.getDate());
+        }
+
+        // Timeline Matrix Logic
+        let statusEmoji = '🔴'; 
+        let statusText = 'Ongoing';
+
+        if (advisoryTargetDate.getTime() > todayAnchor.getTime()) {
+          statusEmoji = '📅'; statusText = 'Upcoming';
+        } else if (advisoryTargetDate.getTime() < todayAnchor.getTime()) {
+          statusEmoji = '🟢'; statusText = 'Done';
+        }
+
+        // Timeline Window Check
+        const isInsideTimelineWindow = (advisoryTargetDate >= sevenDaysAgo && advisoryTargetDate <= sevenDaysAhead);
+
+        if (isInsideTimelineWindow) {
+          const dateStringLabel = processedDates.length > 0 ? processedDates[processedDates.length - 1] : advisoryTargetDate.toDateString();
+          
+          // Custom Paragraph Extractor Style Layout
+          let printableSummarySnippet = "";
+          const startIndex = lowerText.indexOf("please be advised");
+          const endIndex = lowerText.indexOf("at this time.");
+
+          if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+            printableSummarySnippet = fullDetectedText.substring(startIndex, endIndex + "at this time.".length).trim();
+          } else {
+            const rawLines = fullDetectedText.split('\n').map((l: string) => l.trim()).filter((l: string) => l.length > 0);
+            const textLines = rawLines.filter((l: string) => !l.toLowerCase().includes("dear valued") && !l.toLowerCase().includes("advisory"));
+            printableSummarySnippet = textLines.slice(0, 4).join('\n');
+          }
+
+          if (statusText === 'Upcoming') upcomingCount++;
+          if (statusText === 'Ongoing') ongoingCount++;
+          if (statusText === 'Done') doneCount++;
+
+          summaryReportText += `${statusEmoji} **${statusText.toUpperCase()}** • ${dateStringLabel}\n🔧 _System Target_: ${printableSummarySnippet}\n\n`;
+
+          if (mediaGroupItems.length < 10) {
+            // Note: Keep Google API configurations context separate here ONLY to fetch the images binary bytes array streams dynamically
+            const auth = new google.auth.GoogleAuth({
+              keyFile: path.resolve(process.cwd(), 'google-credentials.json'),
+              scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+            });
+            const drive = google.drive({ version: 'v3', auth });
+            
+            const imgFetch = await drive.files.get({ fileId: row.file_id, alt: 'media' }, { responseType: 'arraybuffer' });
+            mediaGroupItems.push({
+              type: 'photo',
+              media: { source: Buffer.from(imgFetch.data as ArrayBuffer) }
+            });
+          }
+        }
+      } // 📜 Correctly closes the `for...of` loop here
+
+      // 🔄 Cleans up the loading message immediately after the loop resolves
+      try { await ctx.telegram.deleteMessage(ctx.chat!.id, temporaryStatusMessage.message_id); } catch (e) {}
+
+      // Delivery Phase
+      if (mediaGroupItems.length > 0) {
+        summaryReportText += `📊 **Summary Metrics Log**:\n📅 Upcoming: \`${upcomingCount}\` | 🔴 Ongoing: \`${ongoingCount}\` | 🟢 Done: \`${doneCount}\``;
+
+        mediaGroupItems[0].caption = summaryReportText;
+        mediaGroupItems[0].parse_mode = 'Markdown';
+
+        await ctx.replyWithMediaGroup(mediaGroupItems);
+      } else {
+        await ctx.reply('📢 **System Status**: All core services operational. No active system maintenance windows identified inside the 14-day window.');
+      }
+    } catch (err: any) {
+      console.error('❌ [Live Database Fetch Advisory Failure]:', err.message);
+      // Fallback cleanup execution block
+      ctx.reply('❌ Unable to process the advisory stream.');
+    }
+  });
+
+  bot.action('menu_faqs', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
       const activeDomain = process.env.NGROK_URL || 'https://possible-buckwheat-abrasion.ngrok-free.dev';
       
-      // 🛠️ Map each database row directly to an interactive Mini App launcher button array
-      const keyboardButtons = result.rows.map((row: any) => {
+      const keyboardButtons = HARDCODED_FAQS.map((row) => {
         const secureUrl = `${activeDomain.replace(/\/$/, '')}/app/?faqId=${row.id}&v=${Date.now()}`;
-        // Format button label cleanly (e.g., "💡 [SECURITY] - WEBHOOK")
         const label = `💡 [${row.category.toUpperCase()}] - ${row.keyword.toUpperCase()}`;
         return [Markup.button.webApp(label, secureUrl)];
       });
 
-      // Keep your clear chat shortcut description at the top of the selection card template
       ctx.reply(
         '💡 **Traxion Developer Knowledge Base**\n\n' +
         'Our structured developer support database is connected! To search document files or pull code blocks instantly via global chats, trigger: `@traxion_hub_bot [keyword]`\n\n' +
@@ -801,151 +965,144 @@ bot.action('menu_faqs', async (ctx) => {
     }
   });
 
-// 4. Feature: 6-Digit QRPH Invoice Lookup (Feature 4)
-    bot.action('menu_lookup_invoice', async (ctx) => {
-      await ctx.answerCbQuery();
-      
-      // 🚀 UPDATED INSTRUCTION SET: Standardizes execution rules for your dual-routing schema parameters natively
-      ctx.reply(
-        `🧾 **QRPH Invoice Status Check**\n\n` +
-        `Please enter your transaction trace options below using the following explicit space-separated layout syntax:\n\n` +
-        `📝 **Format**: \`[6-Digit Code] [YYYY-MM-DD]\`\n\n` +
-        `💡 **Example Execution Input**:\n\`506269 2026-06-15\``,
-        { parse_mode: 'Markdown' }
-      );
-    });
-
-  bot.action('menu_universal_search', async (ctx) => {
-    await ctx.answerCbQuery();
-    ctx.reply('🔍 **Universal Reference Router**\nEnter any Traxion reference sequence string (Transactions, Payouts) to analyze routing path history metadata:');
-  });
-
-// 6. Global Text Interceptor (Dual Router: Handles Invoice Codes, Dates & Universal System References)
-bot.on('text', async (ctx) => {
-  const rawText = ctx.message.text.trim();
-  const telegramUserId = ctx.from.id;
-
-  const activeDomain = process.env.NGROK_URL || 'https://possible-buckwheat-abrasion.ngrok-free.dev';
-  
-  // 📅 DYNAMIC FALLBACK DATE: Automatically falls back to current calendar day (YYYY-MM-DD)
-  let calculatedDate = new Date().toISOString().split('T')[0];
-  let traceCode = rawText;
-
-  // 🔍 PRECISE PATTERN MATCHING ENGINE: Extracts a 6-digit code followed by a space and a date stamp
-  const multiParamMatch = rawText.match(/^(\d{6})\s+(\d{4}-\d{2}-\d{2}|\d{8})$/);
-  
-  if (multiParamMatch) {
-    traceCode = multiParamMatch[1];
-    let matchedDate = multiParamMatch[2];
+  bot.action('menu_lookup_invoice', async (ctx) => {
+    await ctx.answerCbQuery();
     
-    if (matchedDate.length === 8 && !matchedDate.includes('-')) {
-      calculatedDate = `${matchedDate.substring(0, 4)}-${matchedDate.substring(4, 6)}-${matchedDate.substring(6, 8)}`;
-    } else {
-      calculatedDate = matchedDate;
-    }
-    console.log(`🎯 [Bot Precise Sync Engine]: Target Trace Isolated: ${traceCode} | Query Date Matrix: ${calculatedDate}`);
-  }
-
-  // CONDITION A: Handle standard single 6-digit codes or precise space-appended multi-parameter inputs
-  if (/^\d{6}$/.test(traceCode)) {
-    const isCleared = await checkRateLimit(ctx, telegramUserId);
-    if (!isCleared) return;
-
-    const completeSecureUrl = `${activeDomain.replace(/\/$/, '')}/app/?code=${traceCode}&date=${calculatedDate}&v=${Date.now()}`;
-    const tmaMarkup = Markup.inlineKeyboard([
-      [Markup.button.webApp('📱 View Branded Invoice', completeSecureUrl)]
-    ]);
-
     ctx.reply(
-      `🧾 **InstaPay Precise Trace Record Initiated**\n\n` +
-      `• **Target Trace**: \`${traceCode}\`\n` +
-      `• **Target Query Date**: \`${calculatedDate}\`\n\n` +
-      `Click the button below to fetch live, production transaction metrics via secure network tunnels:`, 
-      tmaMarkup
+      `🧾 **QRPH Invoice Status Check**\n\n` +
+      `Please enter your transaction trace options below using the following explicit space-separated layout syntax:\n\n` +
+      `📝 **Format**: \`[Code] [YYYY-MM-DD]\`\n\n` +
+      `💡 **Example Execution Input**:\n\`506269 2026-06-15\``,
+      { parse_mode: 'Markdown' }
     );
-  }
-  // 🚀 CONDITION B UPDATED: Handle multi-line strings, single hashes, long numbers, TXN-, or QRP- strings safely
-  else {
-    // Split input text by line breaks, spaces, or commas to capture an array of keys
-    const extractedCodes = rawText
-      .split(/[\n\s,]+/)
-      .map(code => code.trim())
-      .filter(code => code.length > 0);
+  });
 
-    // Validate if at least one extracted item looks like a universal identifier
-    const hasValidUniversalLookups = extractedCodes.some(code => 
-      (/^[A-Z0-9]{12,}$/i.test(code) && /[A-Z]/i.test(code)) || 
-      /^\d{15,50}$/.test(code) || 
-      /^TXN-/i.test(code) ||
-      /^QRP/i.test(code)
-    );
+  bot.action('menu_universal_search', async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.reply('🔍 **Universal Reference Router**\nEnter any Traxion reference sequence string (Transactions, Payouts) to analyze routing path history metadata:');
+  });
 
-    if (hasValidUniversalLookups) {
+  // Global Text Interceptor (Dual Router: Handles Invoice Codes, Dates & Universal System References)
+  bot.on('text', async (ctx) => {
+    const rawText = ctx.message.text.trim();
+    const telegramUserId = ctx.from.id;
+    const activeDomain = process.env.NGROK_URL || 'https://possible-buckwheat-abrasion.ngrok-free.dev';
+    
+    let calculatedDate = new Date().toISOString().split('T')[0];
+    let traceCode = rawText;
+
+    // 🔍 PRECISE PATTERN MATCHING ENGINE: Handles flexible 4-to-6 digit trace matches seamlessly
+    const multiParamMatch = rawText.match(/^(\d{4,6})\s+(\d{4}-\d{2}-\d{2}|\d{8})$/);
+    
+    if (multiParamMatch) {
+      traceCode = multiParamMatch[1];
+      let matchedDate = multiParamMatch[2];
+      
+      if (matchedDate.length === 8 && !matchedDate.includes('-')) {
+        calculatedDate = `${matchedDate.substring(0, 4)}-${matchedDate.substring(4, 6)}-${matchedDate.substring(6, 8)}`;
+      } else {
+        calculatedDate = matchedDate;
+      }
+      console.log(`🎯 [Bot Precise Sync Engine]: Target Trace Isolated: ${traceCode} | Query Date Matrix: ${calculatedDate}`);
+    }
+
+    // CONDITION A: Handle standard flexible 4-to-6 digit codes or multi-parameter queries
+    if (/^\d{4,6}$/.test(traceCode)) {
       const isCleared = await checkRateLimit(ctx, telegramUserId);
       if (!isCleared) return;
 
-      // Pack codes into a unified, comma-separated stream for safe parameter transit
-      const processedCodeParam = extractedCodes.join(',');
-      const universalSecureUrl = `${activeDomain.replace(/\/$/, '')}/app/?code=${encodeURIComponent(processedCodeParam)}&date=${calculatedDate}&v=${Date.now()}`;
-
+      const completeSecureUrl = `${activeDomain.replace(/\/$/, '')}/app/?code=${traceCode}&date=${calculatedDate}&v=${Date.now()}`;
       const tmaMarkup = Markup.inlineKeyboard([
-        [Markup.button.webApp('🔍 Open Universal Search', universalSecureUrl)]
+        [Markup.button.webApp('📱 View Branded Invoice', completeSecureUrl)]
       ]);
 
-      // Dynamic text updates based on total processed items count
-      const dynamicLabel = extractedCodes.length > 1 
-        ? `🛰️ **Universal Identifiers Traced (${extractedCodes.length} Records Mixed)**`
-        : `🛰️ **Universal Identifier Traced**`;
-
       ctx.reply(
-        `${dynamicLabel}\n\n` +
-        `• **Reference Count**: \`${extractedCodes.length} item(s) detected\`\n` +
-        `• **Routing Scope**: Global Ledger Registry Dynamic Bulk Search\n\n` +
-        `Click the button below to parse transaction history profiles dynamically inside a single unified window session:`, 
+        `🧾 **InstaPay Precise Trace Record Initiated**\n\n` +
+        `• **Target Trace**: \`${traceCode}\`\n` +
+        `• **Target Query Date**: \`${calculatedDate}\`\n\n` +
+        `Click the button below to fetch live, production transaction metrics via secure network tunnels:`, 
         tmaMarkup
       );
-    } else {
-      // Fallback message for completely unrecognized text patterns
-      ctx.reply('ℹ️ Input format unrecognized. Pass an official reference ID key or execute a precise transaction search using:\n\`[6-digit code] [YYYY-MM-DD]\`');
     }
-  }
-});
+    // 🚀 CONDITION B: Handle multi-line strings, single hashes, long numbers, TXN-, or QRP- strings safely
+    else {
+      const extractedCodes = rawText
+        .split(/[\n\s,]+/)
+        .map(code => code.trim())
+        .filter(code => code.length > 0);
 
-  bot.on('inline_query', async (ctx) => {
-    const searchString = ctx.inlineQuery.query.trim().toLowerCase();
-    try {
-      let queryText = 'SELECT * FROM faqs ORDER BY id ASC LIMIT 10';
-      let queryParams: any[] = [];
-      if (searchString.length > 0) {
-        queryText = 'SELECT * FROM faqs WHERE LOWER(keyword) LIKE $1 OR LOWER(category) LIKE $1 LIMIT 10';
-        queryParams = [`%${searchString}%`];
-      }
-      const result = await db.query(queryText, queryParams);
-      const results = result.rows.map((faq: any) => ({
-        type: 'article',
-        id: `faq_${faq.id}`,
-        title: `💡 [${faq.category}] - ${faq.keyword.toUpperCase()}`,
-        description: faq.question,
-        input_message_content: {
-          message_text: `💡 **Traxion Developer Knowledge Base**\n\n• **Category**: ${faq.category}\n• **Question**: ${faq.question}\n\n📖 **Official Implementation**:\n\`\`\`text\n${faq.answer}\n\`\`\``,
-          parse_mode: 'Markdown'
-        }
-      }));
-      await ctx.answerInlineQuery(results as any, { cache_time: 5 });
-    } catch (err: any) {
-      console.error('❌ [Inline Query]: Core registry search failed:', err.message);
-      await ctx.answerInlineQuery([]);
-    }
-  });
+      const hasValidUniversalLookups = extractedCodes.some(code => 
+        (/^[A-Z0-9]{12,}$/i.test(code) && /[A-Z]/i.test(code)) || 
+        /^\d{15,50}$/.test(code) || 
+        /^TXN-/i.test(code) ||
+        /^QRP/i.test(code)
+      );
 
-  app.use(bot.webhookCallback('/telegram-webhook'));
-  
-  bot.telegram.setWebhook(`${CURRENT_ACTIVE_NGROK}/telegram-webhook`)
-    .then(() => console.log(`🚀 [Telegraf]: Webhook registered onto secure bridge: ${CURRENT_ACTIVE_NGROK}`))
-    .catch((err) => console.error('❌ [Telegraf]: Webhook hook sync failed:', err.message));
+      if (hasValidUniversalLookups) {
+        const isCleared = await checkRateLimit(ctx, telegramUserId);
+        if (!isCleared) return;
+
+        const processedCodeParam = extractedCodes.join(',');
+        const universalSecureUrl = `${activeDomain.replace(/\/$/, '')}/app/?code=${encodeURIComponent(processedCodeParam)}&date=${calculatedDate}&v=${Date.now()}`;
+
+        const tmaMarkup = Markup.inlineKeyboard([
+          [Markup.button.webApp('🔍 Open Universal Search', universalSecureUrl)]
+        ]);
+
+        const dynamicLabel = extractedCodes.length > 1 
+          ? `🛰️ **Universal Identifiers Traced (${extractedCodes.length} Records Mixed)**`
+          : `🛰️ **Universal Identifier Traced**`;
+
+        ctx.reply(
+          `${dynamicLabel}\n\n` +
+          `• **Reference Count**: \`${extractedCodes.length} item(s) detected\`\n` +
+          `• **Routing Scope**: Global Ledger Registry Dynamic Bulk Search\n\n` +
+          `Click the button below to parse transaction history profiles dynamically inside a single unified window session:`, 
+          tmaMarkup
+        );
+      } else {
+        ctx.reply('ℹ️ Input format unrecognized. Pass an official reference ID key or execute a precise transaction search using:\n\`[6-digit code] [YYYY-MM-DD]\`');
+      }
+    }
+  });
+
+  // ⚡ INSTANT STATIC INLINE SEARCH FILTERING
+  bot.on('inline_query', async (ctx) => {
+    const searchString = ctx.inlineQuery.query.trim().toLowerCase();
+    try {
+      let filteredResults = HARDCODED_FAQS;
+      if (searchString.length > 0) {
+        filteredResults = HARDCODED_FAQS.filter(faq => 
+          faq.keyword.toLowerCase().includes(searchString) || 
+          faq.category.toLowerCase().includes(searchString)
+        );
+      }
+
+      const results = filteredResults.slice(0, 10).map((faq) => ({
+        type: 'article',
+        id: `faq_${faq.id}`,
+        title: `💡 [${faq.category}] - ${faq.keyword.toUpperCase()}`,
+        description: faq.question,
+        input_message_content: {
+          message_text: `💡 **Traxion Developer Knowledge Base**\n\n• **Category**: ${faq.category}\n• **Question**: ${faq.question}\n\n📖 **Official Implementation**:\n\`\`\`text\n${faq.answer}\n\`\`\``,
+          parse_mode: 'Markdown'
+        }
+      }));
+      await ctx.answerInlineQuery(results as any, { cache_time: 5 });
+    } catch (err: any) {
+      console.error('❌ [Inline Query]: Core registry search failed:', err.message);
+      await ctx.answerInlineQuery([]);
+    }
+  });
+
+  app.use(bot.webhookCallback('/telegram-webhook'));
+  
+  bot.telegram.setWebhook(`${CURRENT_ACTIVE_NGROK}/telegram-webhook`)
+    .then(() => console.log(`🚀 [Telegraf]: Webhook registered onto secure bridge: ${CURRENT_ACTIVE_NGROK}`))
+    .catch((err) => console.error('❌ [Telegraf]: Webhook hook sync failed:', err.message));
 }
 
 // Fire up the HTTP engine interface
 app.listen(PORT, () => {
-  console.log(`⚡ [Express]: Engine listening on interface port: ${PORT}`);
+  console.log(`⚡ [Express]: Engine listening on interface port: ${PORT}`);
 });

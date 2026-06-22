@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import InvoiceDetailView from './views/InvoiceDetailView';
 import UniversalDetailView from './views/UniversalDetailView'; 
 import InvoicePlaceholderView from './views/InvoicePlaceholderView';
-import { FaqDetailView } from './views/FaqDetailView'; // 💡 Clean import injection for FAQ
+import { FaqDetailView } from './views/FaqDetailView';
+import { AdvisoryDetailView } from './views/AdvisoryDetailView'; // 🟢 INJECTED ADVISORY ENGINE IMPORT
 
 export default function App() {
   const [invoiceCode, setInvoiceCode] = useState<string | null>(null);
@@ -10,17 +11,41 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // 🎯 New independent state nodes for FAQ integration strings
   const [faqId, setFaqId] = useState<string | null>(null);
   const [faqData, setFaqData] = useState<any | null>(null);
 
-  // 🔒 Refs to safely handle multi-call lockouts without re-triggering component rendering loops
+  // 🎯 NEW ADVISORY INTEGRATION STATE NODES
+  const [advisoryId, setAdvisoryId] = useState<string | null>(null);
+  const [advisoryData, setAdvisoryData] = useState<any | null>(null);
+
   const isFetchingRef = useRef(false);
   const lastTrackedCodeRef = useRef<string | null>(null);
   const lastTrackedDateRef = useRef<string | null>(null);
-  const lastTrackedFaqIdRef = useRef<string | null>(null); // 🔒 Added FAQ block ref tracking
+  const lastTrackedFaqIdRef = useRef<string | null>(null); 
+  const lastTrackedAdvisoryIdRef = useRef<string | null>(null); // 🔒 Added Advisory ref tracking locking
 
-  // 📡 FAQ DATA FETCHING ENGINE (Safe independent retrieval sequence)
+  // 📡 ADVISORY LIVE DATA FETCHING ENGINE (Parses our live image metadata payloads)
+  async function fetchSingleAdvisory(id: string) {
+    setLoading(true);
+    setApiError(null);
+    try {
+      const targetOrigin = window.location.origin;
+      // Hits the backend route checking the Google Cloud Vision output state loops
+      const response = await fetch(`${targetOrigin}/api/advisories/${id}`, {
+        headers: { 'ngrok-skip-browser-warning': 'true' }
+      });
+      if (!response.ok) throw new Error("Requested advisory flyer file is missing or expired.");
+      
+      const payload = await response.json();
+      setAdvisoryData(payload.data); 
+    } catch (err: any) {
+      setApiError(err.message || "Failed synchronization with live advisory storage arrays.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // 📡 FAQ DATA FETCHING ENGINE
   async function fetchSingleFaq(id: string) {
     setLoading(true);
     setApiError(null);
@@ -58,22 +83,13 @@ export default function App() {
 
     try {
       const targetOrigin = window.location.origin;
-
-      // Unpack string elements separated by commas back into an individual lookup array
-      const targetsToQuery = forcedCode.includes(',') 
-        ? forcedCode.split(',') 
-        : [forcedCode];
-
-      console.log(`📡 [Frontend Core Sync]: Dispatching sequential lookups for ${targetsToQuery.length} reference targets.`);
-
+      const targetsToQuery = forcedCode.includes(',') ? forcedCode.split(',') : [forcedCode];
       const resolvedList: any[] = [];
 
-      // ⏱️ Anti-Throttle Sequential Looper: Avoids 429 errors from bursting endpoints simultaneously
       for (const singleTargetCode of targetsToQuery) {
         const cleanCode = singleTargetCode.trim();
         if (!cleanCode) continue;
 
-        // Introduce a subtle 150ms delay between fetches to respect Redis/Gateway rate limits
         if (targetsToQuery.length > 1) {
           await new Promise((resolve) => setTimeout(resolve, 150));
         }
@@ -103,7 +119,6 @@ export default function App() {
             continue;
           }
 
-          // 📥 ✨ UNPACK ENTIRE DATA LIST: Extract and normalize collections without losing index entries
           let itemsBlock: any[] = [];
           if (Array.isArray(workingData)) {
             itemsBlock = workingData;
@@ -115,20 +130,16 @@ export default function App() {
             itemsBlock = [workingData];
           }
 
-          // If the unpacked collection is empty, treat it as a structural lookup drop
           if (itemsBlock.length === 0) {
             resolvedList.push({ transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 });
             continue;
           }
 
-          // Run evaluation filters over each element inside this clean extracted sub-array block
           const processedItems = itemsBlock.map((item: any) => {
             if (!item) return { transactionReferenceNumber: cleanCode, status: 'NOT FOUND', statusCode: 404 };
-
             const txRefString = String(item.transactionReferenceNumber || '');
             const rawAmt = Number(item.transactionAmount || item.amount || 0);
             
-            // Mask dummy backend database placeholder objects cleanly
             if (txRefString.startsWith('FALLBACK-') && rawAmt === 0) {
               return {
                 ...item,
@@ -140,7 +151,6 @@ export default function App() {
             return item;
           });
 
-          // 🚀 FIX: Flatten and append the ENTIRE processed array subset into our layout queue stack!
           resolvedList.push(...processedItems);
 
         } catch (itemErr) {
@@ -148,7 +158,6 @@ export default function App() {
         }
       }
 
-      // Filter out any unintended null references from our clean map array list
       const cleanFinalizedList = resolvedList.filter(item => item !== null);
       setTransactionsList(cleanFinalizedList);
 
@@ -162,7 +171,7 @@ export default function App() {
     }
   }
 
-  // 🚀 UNIFIED HARDWARE EVENT SYNC LIFECYCLE
+  // 🚀 UNIFIED INTERFACE PARSE LIFECYCLE
   useEffect(() => {
     const tg = (window as any).Telegram?.WebApp;
     
@@ -181,18 +190,34 @@ export default function App() {
     const synchronizeCurrentUrlParams = () => {
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
-      const currentFaqId = params.get('faqId'); // 🎯 Read FAQ parameters safely
+      const currentFaqId = params.get('faqId'); 
+      const currentAdvisoryId = params.get('advisoryId'); // 🎯 READ ADVISORY URL HOOKS
       let urlQueryDate = params.get('date'); 
       
       if (!urlQueryDate) {
         urlQueryDate = new Date().toISOString().split('T')[0];
       }
 
-      // Check parameter matching paths cleanly without shifting reference triggers out of timing bounds
-      if (currentFaqId) {
+      // Priority Multiplexer Routing Logic Matrix
+      if (currentAdvisoryId) {
+        if (currentAdvisoryId !== lastTrackedAdvisoryIdRef.current) {
+          lastTrackedAdvisoryIdRef.current = currentAdvisoryId;
+          lastTrackedFaqIdRef.current = null;
+          lastTrackedCodeRef.current = null;
+
+          setAdvisoryId(currentAdvisoryId);
+          setFaqId(null);
+          setInvoiceCode(null);
+          fetchSingleAdvisory(currentAdvisoryId);
+        }
+      } else if (currentFaqId) {
         if (currentFaqId !== lastTrackedFaqIdRef.current) {
           lastTrackedFaqIdRef.current = currentFaqId;
+          lastTrackedAdvisoryIdRef.current = null;
+          lastTrackedCodeRef.current = null;
+
           setFaqId(currentFaqId);
+          setAdvisoryId(null);
           setInvoiceCode(null);
           fetchSingleFaq(currentFaqId);
         }
@@ -200,8 +225,10 @@ export default function App() {
         lastTrackedCodeRef.current = code;
         lastTrackedDateRef.current = urlQueryDate;
         lastTrackedFaqIdRef.current = null;
+        lastTrackedAdvisoryIdRef.current = null;
         
         setFaqId(null);
+        setAdvisoryId(null);
         setInvoiceCode(code);
         fetchLiveLedgerData(code, urlQueryDate);
       }
@@ -231,10 +258,7 @@ export default function App() {
     };
   }, []);
 
-  // Standard short lookups route to single Invoice Views
   const isStandardInvoiceTrace = invoiceCode ? /^\d{6}$/.test(invoiceCode) : true;
-
-  // Intercept if the specific target element represents a missing data frame placeholder item
   const isExplicitNotFound = transactionsList[0]?.status === 'NOT FOUND' || transactionsList[0]?.statusCode === 404;
 
   return (
@@ -253,8 +277,16 @@ export default function App() {
     }}>
       {loading ? (
         <div style={{ color: '#8aa1b5', fontSize: '14px', marginTop: '40vh' }}>🚀 Synchronizing Live Ledger State Matrix...</div>
+      ) : advisoryId && advisoryData ? (
+        /* 🪐 1. RENDER ADVISORY SCREEN ROUTE */
+        <AdvisoryDetailView 
+          title={advisoryData.title}
+          status={advisoryData.status}
+          imageUrl={advisoryData.imageUrl}
+          dateDescription={advisoryData.dateDescription}
+        />
       ) : faqId && faqData ? (
-        /* 🪐 RENDER THE TARGET FAQ MANUAL COMPONENT POPUP MODAL SCREEN */
+        /* 🪐 2. RENDER FAQ SCREEN ROUTE */
         <FaqDetailView 
           category={faqData.category}
           keyword={faqData.keyword}
@@ -262,14 +294,10 @@ export default function App() {
           answer={faqData.answer}
         />
       ) : transactionsList.length > 0 ? (
+        /* 🪐 3. RENDER TRANSACTION LEDGER SCREEN ROUTE */
         isExplicitNotFound ? (
-          // Render a clean Transaction Not Found Card Frame
-          <InvoiceDetailView 
-            transaction={transactionsList[0]} 
-            invoiceCode={invoiceCode} 
-          />
+          <InvoiceDetailView transaction={transactionsList[0]} invoiceCode={invoiceCode} />
         ) : isStandardInvoiceTrace ? (
-          // 🪐 Renders multiple invoice cards smoothly if multiple matches are bound to this 6-digit trace code!
           transactionsList.map((txRecord, idx) => (
             <InvoiceDetailView 
               key={txRecord.transactionReferenceNumber || txRecord.referenceId || idx} 
@@ -278,13 +306,10 @@ export default function App() {
             />
           ))
         ) : (
-          /* Route down to our bulk universal scrolling list interface */
-          <UniversalDetailView 
-            transactions={transactionsList} 
-            invoiceCode={invoiceCode} 
-          />
+          <UniversalDetailView transactions={transactionsList} invoiceCode={invoiceCode} />
         )
       ) : (
+        /* 🪐 4. FALLBACK ENTRY PLACEHOLDER VIEW */
         <div style={{ textAlign: 'center', width: '100%', maxWidth: '400px', marginTop: '20vh' }}>
           <InvoicePlaceholderView invoiceCode={invoiceCode} />
           {apiError && (
