@@ -5,6 +5,10 @@
 backend/.env
 frontend/.env
 
+# 🔑 GOOGLE CLOUD IAM SERVICE ACCOUNT CREDENTIALS
+backend/google-credentials.json
+google-credentials.json
+
 # 📦 DEPENDENCY WORKSPACES (FIXES THE 7K+ STAGED CHANGES)
 node_modules/
 backend/node_modules/
