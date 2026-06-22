@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import InvoiceDetailView from './views/InvoiceDetailView';
 import UniversalDetailView from './views/UniversalDetailView'; 
 import InvoicePlaceholderView from './views/InvoicePlaceholderView';
+import { FaqDetailView } from './views/FaqDetailView'; // 💡 Clean import injection for FAQ
 
 export default function App() {
   const [invoiceCode, setInvoiceCode] = useState<string | null>(null);
@@ -9,10 +10,35 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
+  // 🎯 New independent state nodes for FAQ integration strings
+  const [faqId, setFaqId] = useState<string | null>(null);
+  const [faqData, setFaqData] = useState<any | null>(null);
+
   // 🔒 Refs to safely handle multi-call lockouts without re-triggering component rendering loops
   const isFetchingRef = useRef(false);
   const lastTrackedCodeRef = useRef<string | null>(null);
   const lastTrackedDateRef = useRef<string | null>(null);
+  const lastTrackedFaqIdRef = useRef<string | null>(null); // 🔒 Added FAQ block ref tracking
+
+  // 📡 FAQ DATA FETCHING ENGINE (Safe independent retrieval sequence)
+  async function fetchSingleFaq(id: string) {
+    setLoading(true);
+    setApiError(null);
+    try {
+      const targetOrigin = window.location.origin;
+      const response = await fetch(`${targetOrigin}/api/faqs/${id}`, {
+        headers: { 'ngrok-skip-browser-warning': 'true' }
+      });
+      if (!response.ok) throw new Error("Requested FAQ documentation card is missing.");
+      
+      const payload = await response.json();
+      setFaqData(payload.data);
+    } catch (err: any) {
+      setApiError(err.message || "Failed synchronization with technical assets library.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   // 📡 BATCH THROTTLED DATA ROUTING ENGINE
   async function fetchLiveLedgerData(forcedCode: string | null, forcedDate: string | null) {
@@ -155,16 +181,27 @@ export default function App() {
     const synchronizeCurrentUrlParams = () => {
       const params = new URLSearchParams(window.location.search);
       const code = params.get('code');
+      const currentFaqId = params.get('faqId'); // 🎯 Read FAQ parameters safely
       let urlQueryDate = params.get('date'); 
       
       if (!urlQueryDate) {
         urlQueryDate = new Date().toISOString().split('T')[0];
       }
 
-      if (code !== lastTrackedCodeRef.current || urlQueryDate !== lastTrackedDateRef.current) {
+      // Check parameter matching paths cleanly without shifting reference triggers out of timing bounds
+      if (currentFaqId) {
+        if (currentFaqId !== lastTrackedFaqIdRef.current) {
+          lastTrackedFaqIdRef.current = currentFaqId;
+          setFaqId(currentFaqId);
+          setInvoiceCode(null);
+          fetchSingleFaq(currentFaqId);
+        }
+      } else if (code !== lastTrackedCodeRef.current || urlQueryDate !== lastTrackedDateRef.current) {
         lastTrackedCodeRef.current = code;
         lastTrackedDateRef.current = urlQueryDate;
+        lastTrackedFaqIdRef.current = null;
         
+        setFaqId(null);
         setInvoiceCode(code);
         fetchLiveLedgerData(code, urlQueryDate);
       }
@@ -216,6 +253,14 @@ export default function App() {
     }}>
       {loading ? (
         <div style={{ color: '#8aa1b5', fontSize: '14px', marginTop: '40vh' }}>🚀 Synchronizing Live Ledger State Matrix...</div>
+      ) : faqId && faqData ? (
+        /* 🪐 RENDER THE TARGET FAQ MANUAL COMPONENT POPUP MODAL SCREEN */
+        <FaqDetailView 
+          category={faqData.category}
+          keyword={faqData.keyword}
+          question={faqData.question}
+          answer={faqData.answer}
+        />
       ) : transactionsList.length > 0 ? (
         isExplicitNotFound ? (
           // Render a clean Transaction Not Found Card Frame

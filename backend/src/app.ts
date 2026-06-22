@@ -28,6 +28,7 @@ console.log('📌 [Config Sync]: Active Tunnel Domain:', CURRENT_ACTIVE_NGROK);
 // Production Traxion Gateway Core Variables Configuration
 const TRAXION_BASE_URL = 'https://api.traxionpay.com';
 const REDIS_TOKEN_KEY = 'traxion:session:access_token';
+const REDIS_SECRET_KEY = 'traxion:session:secret_key';
 
 app.use(cors());
 app.use(express.json());
@@ -108,98 +109,93 @@ function generateRollingTOTP(secretKey: string, customTimestamp: number): string
 // =========================================================================
 
 /**
- * 🔒 Internal Core Helper: Resolves non-expired token states via Redis or launches background login
- */
-async function getValidSessionToken(): Promise<string> {
-  try {
-    // Keep this alive to ensure a clean slot verification on every iteration while debugging
-     await redis.del(REDIS_TOKEN_KEY);
+ * 🔒 Internal Core Helper: Resolves non-expired token states via Redis or launches background login
+ */
+async function getValidSessionToken(): Promise<{ accessToken: string; secretKey: string }> {
+  try {
+    // Check local memory cache parameters first
+    const cachedToken = await redis.get(REDIS_TOKEN_KEY);
+    const cachedSecret = await redis.get(REDIS_SECRET_KEY);
+    
+    if (cachedToken && cachedSecret) {
+      return { accessToken: cachedToken, secretKey: cachedSecret };
+    }
 
-    const cachedToken = await redis.get(REDIS_TOKEN_KEY);
-    if (cachedToken) return cachedToken;
+    console.log('🔑 [Auth Engine]: Session missing or expired. Initializing token handshake...');
 
-    console.log('🔑 [Auth Engine]: Session missing or expired. Initializing token handshake...');
+    const masterSecret = "HCFQQARAAHRGMYDK";
+    const clientTimestamp = Date.now();
+    const rollingOtp = generateRollingTOTP(masterSecret, clientTimestamp);
 
-    const masterSecret = "HCFQQARAAHRGMYDK";
-    const clientTimestamp = Date.now();
-    const rollingOtp = generateRollingTOTP(masterSecret, clientTimestamp);
+    const rawPlainBody = JSON.stringify({
+      username: "opstestaccount01@traxionpay.com",
+      userPassword: "Tb9GREZe*MGdT&eu",
+      passwordType: 1
+    });
 
-    // 1. Structural Object Composition matching verification schemas
-    const rawPlainBody = JSON.stringify({
-      username: "opstestaccount01@traxionpay.com",
-      userPassword: "Tb9GREZe*MGdT&eu",
-      passwordType: 1
-    });
+    const encryptedBodyString = CryptoJS.AES.encrypt(rawPlainBody, rollingOtp).toString();
 
-    // 2. Wrap payload inside an AES crypt block using rolling OTP token code
-    const encryptedBodyString = CryptoJS.AES.encrypt(rawPlainBody, rollingOtp).toString();
+    const authResponse = await axios.post(
+      `${TRAXION_BASE_URL}/auth/login`, 
+      { data: encryptedBodyString },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+          'X-Client-Timestamp': String(clientTimestamp),
+          'User-Agent': 'PostmanRuntime/7.43.0',
+          'Connection': 'keep-alive'
+        }
+      }
+    );
 
-    const authResponse = await axios.post(
-      `${TRAXION_BASE_URL}/auth/login`, 
-      { data: encryptedBodyString },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json, text/plain, */*',
-          'X-Client-Timestamp': String(clientTimestamp), // ✨ FIXED: Explicitly cast to string to prevent Axios/Node exceptions
-          'User-Agent': 'PostmanRuntime/7.43.0',
-          'Connection': 'keep-alive'
-        }
-      }
-    );
+    const rootEncryptedPayload = authResponse.data;
+    const serverResponseTimestamp = authResponse.headers['x-server-timestamp'];
+    
+    if (!rootEncryptedPayload || !rootEncryptedPayload.data) {
+      throw new Error("Gateway tracking payload structure returned completely unparseable or empty.");
+    }
 
-    const rootEncryptedPayload = authResponse.data;
-    const serverResponseTimestamp = authResponse.headers['x-server-timestamp'];
-    
-    if (!rootEncryptedPayload || !rootEncryptedPayload.data) {
-      throw new Error("Gateway tracking payload structure returned completely unparseable or empty.");
-    }
+    const responseOtp = generateRollingTOTP(masterSecret, Number(serverResponseTimestamp));
+    const bytesDecrypted = CryptoJS.AES.decrypt(rootEncryptedPayload.data, responseOtp);
+    const parsedPlaintextString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
+    
+    if (!parsedPlaintextString) {
+      throw new Error("Unable to successfully decrypt the gateway payload response structure envelope.");
+    }
 
-    // 3. Compute response key using server timestamp response headers
-    const responseOtp = generateRollingTOTP(masterSecret, Number(serverResponseTimestamp));
-    
-    // 4. Decrypt target parameter context blocks matching corporate schemas
-    const bytesDecrypted = CryptoJS.AES.decrypt(rootEncryptedPayload.data, responseOtp);
-    const parsedPlaintextString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
-    
-    if (!parsedPlaintextString) {
-      throw new Error("Unable to successfully decrypt the gateway payload response structure envelope.");
-    }
+    const cleanJsonResponse = JSON.parse(parsedPlaintextString);
 
-    const cleanJsonResponse = JSON.parse(parsedPlaintextString);
+    if (cleanJsonResponse && cleanJsonResponse.code == '220022' && cleanJsonResponse.data?.accessToken) {
+      const freshToken = cleanJsonResponse.data.accessToken;
+      const freshSecret = cleanJsonResponse.data.secretKey || "BCEKLKEDLCJKQPAN"; // 🎯 Extracts directly from your live payload logs
 
-    // ✨ THE TEMPORARY DIAGNOSTIC PRINT: Logs the exact plaintext response from Traxion!
-    console.log('📌 [Auth Engine Gateway Plaintext Response]:', cleanJsonResponse);
+      // Cache both fields together cleanly in Redis memory
+      await redis.setex(REDIS_TOKEN_KEY, 2700, freshToken);
+      await redis.setex(REDIS_SECRET_KEY, 2700, freshSecret);
+      
+      console.log('✅ [Auth Engine]: Token context and Secret Matrix synchronized and cached in Redis memory.');
+      return { accessToken: freshToken, secretKey: freshSecret };
+    }
 
-    if (cleanJsonResponse && cleanJsonResponse.code == '220022' && cleanJsonResponse.data?.accessToken) {
-      const freshToken = cleanJsonResponse.data.accessToken;
-      await redis.setex(REDIS_TOKEN_KEY, 2700, freshToken);
-      console.log('✅ [Auth Engine]: Token context synchronized and cached in Redis memory.');
-      return freshToken;
-    }
+    throw new Error(cleanJsonResponse?.message || `Gateway returned error code: ${cleanJsonResponse?.code}`);
+  } catch (error: any) {
+    if (error.response?.data?.data) {
+      try {
+        const masterSecret = "HCFQQARAAHRGMYDK";
+        const serverErrTimestamp = error.response.headers['x-server-timestamp'];
+        const errOtp = generateRollingTOTP(masterSecret, Number(serverErrTimestamp));
+        const decBytes = CryptoJS.AES.decrypt(error.response.data.data, errOtp);
+        const plainErr = JSON.parse(decBytes.toString(CryptoJS.enc.Utf8));
+        console.error('❌ [Auth Engine Gateway Decrypted Error Context]:', plainErr);
+        throw new Error(`Gateway Error: ${plainErr.message || plainErr.code}`);
+      } catch (inner) {}
+    }
 
-    // ✨ Updated error handling to throw the actual error message sent by the gateway application
-    throw new Error(cleanJsonResponse?.message || `Gateway returned error code: ${cleanJsonResponse?.code}`);
-  } catch (error: any) {
-    // Advanced fallback logic: If the server sent an encrypted error body back, decrypt it so we can read it!
-    if (error.response?.data?.data) {
-      try {
-        const masterSecret = "HCFQQARAAHRGMYDK";
-        const serverErrTimestamp = error.response.headers['x-server-timestamp'];
-        const errOtp = generateRollingTOTP(masterSecret, Number(serverErrTimestamp));
-        const decBytes = CryptoJS.AES.decrypt(error.response.data.data, errOtp);
-        const plainErr = JSON.parse(decBytes.toString(CryptoJS.enc.Utf8));
-        console.error('❌ [Auth Engine Gateway Decrypted Error Context]:', plainErr);
-        throw new Error(`Gateway Error: ${plainErr.message || plainErr.code}`);
-      } catch (inner) {
-        // Fallback if inner decryption fails
-      }
-    }
-
-    const errorDetails = error.response?.data || error.message;
-    console.error('❌ [Auth Engine Detailed Failure Dump]:', errorDetails);
-    throw new Error(`Authentication Engine Failure: ${error.message}`);
-  }
+    const errorDetails = error.response?.data || error.message;
+    console.error('❌ [Auth Engine Detailed Failure Dump]:', errorDetails);
+    throw new Error(`Authentication Engine Failure: ${error.message}`);
+  }
 }
 
 /**
@@ -285,19 +281,12 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
     
     // 🔑 FETCH LIVE ACTIVE SESSION DATA MATRIX
     const sessionContext: any = await getValidSessionToken();
-    
-    // Dynamically unpack fallback variables based on token type structure
-    let bearerToken = "";
-    let systemSecretSeed = "BCEKLKEDLCJKQPAN"; // Safe operational default fallback
 
-    if (sessionContext && typeof sessionContext === 'object') {
-      bearerToken = sessionContext.accessToken || '';
-      if (sessionContext.secretKey) {
-        systemSecretSeed = sessionContext.secretKey; // 🎯 AUTOMATICALLY EXTRACTED HERE!
-      }
-    } else if (typeof sessionContext === 'string') {
-      bearerToken = sessionContext;
-    }
+    // Clean, single-assignment extraction with safe operational fallback defaults
+    const bearerToken = (typeof sessionContext === 'object' ? sessionContext.accessToken : sessionContext) || "";
+    const systemSecretSeed = (typeof sessionContext === 'object' && sessionContext.secretKey) ? sessionContext.secretKey : "BCEKLKEDLCJKQPAN";
+
+    console.log('🔄 [Route Sync]: Active session variables bounded successfully.');
 
     // Loop through formats against the live production gateway engine
     for (const targetedDateFormat of dateFormatsToTry) {
@@ -512,17 +501,10 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
   try {
     // 🔑 1. FETCH LIVE ACTIVE SESSION DATA ONCE FOR THE BATCH
     const sessionContext: any = await getValidSessionToken(); 
-    let bearerToken = "";
-    let dynamicSecretSeed = "BCEKLKEDLCJKQPAN"; 
-
-    if (sessionContext && typeof sessionContext === 'object') {
-      bearerToken = sessionContext.accessToken || '';
-      if (sessionContext.secretKey) {
-        dynamicSecretSeed = sessionContext.secretKey;
-      }
-    } else if (typeof sessionContext === 'string') {
-      bearerToken = sessionContext;
-    }
+    
+    // Safely unpack session tokens without crashing or re-declaring block scopes
+    const bearerToken = (typeof sessionContext === 'object' ? sessionContext.accessToken : sessionContext) || "";
+    const dynamicSecretSeed = (typeof sessionContext === 'object' && sessionContext.secretKey) ? sessionContext.secretKey : "BCEKLKEDLCJKQPAN";
 
     // Process every tracking ID found in the input message parameters
     for (const cleanReferenceId of referenceList) {
@@ -698,6 +680,43 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
   }
 });
 
+
+// =========================================================================
+// 🛰️ Postman API Route C: Single FAQ Record Detail Fetcher
+// =========================================================================
+app.get('/api/faqs/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    // 🧼 Force-trim and strip out hidden Windows carriage returns (\r) or newlines (\n)
+    const cleanIdString = String(id).replace(/[\r\n]/g, '').trim();
+    const cleanId = parseInt(cleanIdString, 10);
+
+    // 🛑 Early exit check if the resulting sanitized entity fails to represent a true number
+    if (isNaN(cleanId)) {
+      return res.status(400).json({ 
+        code: 400000, 
+        message: `Malformed parameters: Incoming ID value "${id.replace(/[\r\n]/g, '\\r')}" could not be parsed as a valid integer.` 
+      });
+    }
+
+    // 🔍 Query the database using the safe, cleaned cleanId integer
+    const result = await db.query('SELECT category, keyword, question, answer FROM faqs WHERE id = $1', [cleanId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ code: 404000, message: "FAQ record not found." });
+    }
+
+    return res.json({
+      code: 200000,
+      message: "FAQ retrieved successfully.",
+      data: result.rows[0]
+    });
+  } catch (err: any) {
+    console.error('❌ [FAQ API Failure]:', err.message);
+    return res.status(500).json({ code: 500000, message: `Internal server error: ${err.message}` });
+  }
+});
+
 // Base API healthcheck endpoint
 app.get('/health', async (req, res) => {
   try {
@@ -747,10 +766,40 @@ if (!BOT_TOKEN) {
     }
   });
 
-  bot.action('menu_faqs', async (ctx) => {
-    await ctx.answerCbQuery();
-    ctx.reply('💡 **Traxion Developer Knowledge Base**\n\nOur structured developer support database is connected! To search document files or pull code blocks instantly via global chats, trigger: `@traxion_hub_bot [keyword]`');
-  });
+bot.action('menu_faqs', async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      
+      // 🔍 Fetch top categories and keywords directly from your PostgreSQL table
+      const result = await db.query('SELECT id, category, keyword FROM faqs ORDER BY id ASC LIMIT 30');
+      
+      if (result.rows.length === 0) {
+        return ctx.reply('💡 **Knowledge Base**: No documentation matrices found in the ledger subsystem.');
+      }
+
+      const activeDomain = process.env.NGROK_URL || 'https://possible-buckwheat-abrasion.ngrok-free.dev';
+      
+      // 🛠️ Map each database row directly to an interactive Mini App launcher button array
+      const keyboardButtons = result.rows.map((row: any) => {
+        const secureUrl = `${activeDomain.replace(/\/$/, '')}/app/?faqId=${row.id}&v=${Date.now()}`;
+        // Format button label cleanly (e.g., "💡 [SECURITY] - WEBHOOK")
+        const label = `💡 [${row.category.toUpperCase()}] - ${row.keyword.toUpperCase()}`;
+        return [Markup.button.webApp(label, secureUrl)];
+      });
+
+      // Keep your clear chat shortcut description at the top of the selection card template
+      ctx.reply(
+        '💡 **Traxion Developer Knowledge Base**\n\n' +
+        'Our structured developer support database is connected! To search document files or pull code blocks instantly via global chats, trigger: `@traxion_hub_bot [keyword]`\n\n' +
+        'Alternatively, select a technical manual below to launch interactive layout views inside your overlay workspace:',
+        Markup.inlineKeyboard(keyboardButtons)
+      );
+
+    } catch (err: any) {
+      console.error('❌ [FAQ Menu Generator Error]:', err.message);
+      ctx.reply('❌ Unable to process the documentation ledger stream at this moment.');
+    }
+  });
 
 // 4. Feature: 6-Digit QRPH Invoice Lookup (Feature 4)
     bot.action('menu_lookup_invoice', async (ctx) => {
