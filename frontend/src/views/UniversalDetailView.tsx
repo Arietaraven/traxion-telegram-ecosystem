@@ -49,34 +49,38 @@ export default function UniversalDetailView({ transactions, invoiceCode }: Unive
         const integRef = transaction.integratorReferenceNumber || '---';
         const aggRef = transaction.aggregatorReferenceNumber || '---';
         
-        // ✨ FIXED: Prioritize the item's specific reference number instead of the giant global comma-string.
-        // If the item has an aggregatorReferenceNumber or specific reference payload, we show that single clean key.
         const activeQueryKey = transaction.transactionReferenceNumber || transaction.aggregatorReferenceNumber || invoiceCode || '---';
         
-        // Removed fee calculation additions completely - showing pure base amount
+        // Parse raw cent values as integers before dividing by 100
         const baseAmountRaw = transaction.transactionAmount ?? transaction.amount ?? 0;
-        const numericAmount = (typeof baseAmountRaw === 'string' ? parseFloat(baseAmountRaw) : baseAmountRaw) / 100;
+        const numericAmount = (typeof baseAmountRaw === 'string' ? parseInt(baseAmountRaw, 10) : Number(baseAmountRaw)) / 100;
 
-        // Clean numeric match validation sequence rules 
+        // Determine granular status evaluation rules
         let statusStr = "PENDING";
         let isSuccessful = false;
         let isFailed = false;
+        let isNotFound = false;
 
         if (transaction.status === 1 || String(transaction.status) === '1') {
           statusStr = "SUCCESSFUL";
           isSuccessful = true;
         } else if (transaction.status === -1 || String(transaction.status) === '-1') {
-          statusStr = "NOT FOUND";
-          isFailed = true;
+          // Check if the remark explicitly indicates it wasn't found in the system ledger
+          if (transaction.remarks && String(transaction.remarks).toLowerCase().includes("not identified")) {
+            statusStr = "NOT FOUND";
+            isNotFound = true;
+          } else {
+            statusStr = "FAILED";
+            isFailed = true;
+          }
         }
 
         const dateCreated = transaction.dateTimeCreated || transaction.created_at || new Date().toISOString();
 
-        // 🚨 alternate error design card box shown for failed/missing record lookups
-        if (isFailed) {
+        // 🚨 CASE 1: Render full-screen warning ONLY if the transaction truly does not exist
+        if (isNotFound) {
           return (
             <div key={txRef + index} style={{ ...styles.card, borderColor: 'rgba(239, 68, 68, 0.4)', backgroundColor: 'rgba(239, 68, 68, 0.02)' }}>
-              {/* Upper Badge Layer */}
               <div style={styles.badgeContainer}>
                 <div style={{
                   ...styles.statusBadge,
@@ -103,7 +107,6 @@ export default function UniversalDetailView({ transactions, invoiceCode }: Unive
               <div style={styles.divider} />
 
               <div style={styles.metaGrid}>
-                {/* Target Query Key container box */}
                 <div style={{ ...styles.targetQueryCard, backgroundColor: 'rgba(239, 68, 68, 0.05)', borderColor: 'rgba(239, 68, 68, 0.2)' }}>
                   <span style={{ ...styles.targetQueryLabel, color: '#ef4444' }}>Target Query Key</span>
                   <div style={styles.targetQueryValue}>{activeQueryKey}</div>
@@ -126,16 +129,30 @@ export default function UniversalDetailView({ transactions, invoiceCode }: Unive
           );
         }
 
-        // Standard card interface shown for successful/pending record lookups
+        // 🪐 CASE 2: Render regular UI Card layout for SUCCESSFUL, PENDING, or FAILED transactions
+        let statusColor = '#fbbf24'; // Pending amber
+        let statusBgColor = 'rgba(251, 191, 36, 0.12)';
+        let statusBorderColor = 'rgba(251, 191, 36, 0.25)';
+
+        if (isSuccessful) {
+          statusColor = '#10b981'; // Green
+          statusBgColor = 'rgba(16, 185, 129, 0.12)';
+          statusBorderColor = 'rgba(16, 185, 129, 0.25)';
+        } else if (isFailed) {
+          statusColor = '#f87171'; // Failed light red
+          statusBgColor = 'rgba(248, 113, 113, 0.12)';
+          statusBorderColor = 'rgba(248, 113, 113, 0.3)';
+        }
+
         return (
           <div key={txRef + index} style={styles.card}>
             {/* Upper Badge Layer */}
             <div style={styles.badgeContainer}>
               <div style={{
                 ...styles.statusBadge,
-                backgroundColor: isSuccessful ? 'rgba(16, 185, 129, 0.12)' : 'rgba(251, 191, 36, 0.12)',
-                color: isSuccessful ? '#10b981' : '#fbbf24',
-                border: isSuccessful ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(251, 191, 36, 0.25)'
+                backgroundColor: statusBgColor,
+                color: statusColor,
+                border: statusBorderColor
               }}>
                 🪐 RECORD SEGMENT #{index + 1}
               </div>
@@ -173,13 +190,20 @@ export default function UniversalDetailView({ transactions, invoiceCode }: Unive
                 <div style={styles.nestedValue}>{aggRef}</div>
               </div>
 
+              {transaction.remarks && (
+                <div style={{ ...styles.nestedBox, borderColor: isFailed ? 'rgba(248, 113, 113, 0.15)' : 'rgba(255, 255, 255, 0.04)' }}>
+                  <span style={styles.nestedLabel}>Gateway System Remarks</span>
+                  <div style={{ ...styles.nestedValue, color: isFailed ? '#f87171' : '#8aa1b5' }}>{transaction.remarks}</div>
+                </div>
+              )}
+
               <div style={styles.dividerInside} />
 
               {/* Core Attributes Footer Array */}
               <div style={styles.metaRow}>
                 <span style={styles.metaLabel}>Processing State</span>
                 <span style={{ 
-                  color: isSuccessful ? '#10b981' : '#fbbf24',
+                  color: statusColor,
                   fontWeight: 700,
                   fontSize: '13px',
                   letterSpacing: '0.3px'
