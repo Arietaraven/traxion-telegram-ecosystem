@@ -37,6 +37,11 @@ const REDIS_SECRET_KEY = 'traxion:session:secret_key';
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+  res.setHeader('ngrok-skip-browser-warning', 'true');
+  next();
+});
+
 // =========================================================================
 // 🚀 UNIFIED FRONTEND INTERFACE MATRIX (PRODUCTION DIST ENGINE)
 // =========================================================================
@@ -256,10 +261,23 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
     
     if (isKnownInvalid === 'NOT_FOUND') {
       console.log(`🛡️ [Redis Guard Hit]: Blocking expensive lookup for known invalid trace: ${traceNumber}`);
-      return res.status(404).json({
-        code: 404000,
-        message: "No active transaction records found matching this explicit lookup parameters matrix across production servers. (Cached Rejection)",
-        data: []
+      
+      // ✨ FIXED: Return structured fallback data even on Redis hit to prevent frontend blanks
+      return res.json({
+        code: 200000,
+        message: "Transaction details fetched successfully.",
+        data: [{
+          transactionReferenceNumber: String(traceNumber),
+          integratorReferenceNumber: '---',
+          aggregatorReferenceNumber: '---',
+          transactionAmount: 0,
+          transactionFee: 0,
+          status: -1,
+          remarks: "Reference target entry not identified inside ledger streams. (Cached Rejection)",
+          description: "Failed Lookup Entry",
+          dateTimeCreated: new Date().toISOString(),
+          dateTimeStatusUpdated: new Date().toISOString()
+        }]
       });
     }
 
@@ -400,23 +418,26 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
 
         // Unwrap and map results
         let innerDataBlock = payloadData?.data;
+        let localExtractedList: any[] = [];
 
         if (innerDataBlock) {
           if (Array.isArray(innerDataBlock)) {
-            extractedTransactionsList = innerDataBlock;
+            localExtractedList = innerDataBlock;
           } 
           else if (innerDataBlock.list && Array.isArray(innerDataBlock.list)) {
-            extractedTransactionsList = innerDataBlock.list;
+            localExtractedList = innerDataBlock.list;
           } 
           else if (innerDataBlock.data && Array.isArray(innerDataBlock.data)) {
-            extractedTransactionsList = innerDataBlock.data;
+            localExtractedList = innerDataBlock.data;
           }
           else if (typeof innerDataBlock === 'object') {
-            extractedTransactionsList = [innerDataBlock];
+            localExtractedList = [innerDataBlock];
           }
         }
 
-        if (extractedTransactionsList.length > 0) {
+        // Filter out valid data entries only
+        if (localExtractedList.length > 0 && localExtractedList[0] && !localExtractedList[0].error) {
+          extractedTransactionsList = localExtractedList;
           console.log(`✅ [Adaptive Processing Match]: Successfully parsed ${extractedTransactionsList.length} records.`);
           break;
         }
@@ -428,7 +449,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
 
     // MULTI-RECORD DATABASE CACHE PERSISTENCE
     if (extractedTransactionsList.length > 0) {
-      console.log(`📝 [Database Writer Engine]: Caching ${extractedTransactionsList.length} production records into local PostgreSQL.`);
+      console.log(`📝 [Database Writer Engine]: Caching ${extractedTransactionsList.length} production records into local storage.`);
       
       for (const targetItem of extractedTransactionsList) {
         if (targetItem) {
@@ -438,6 +459,8 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
               const statusStr = String(targetItem.status).toUpperCase();
               if (targetItem.status === 1 || statusStr === 'SUCCESSFUL' || statusStr === 'PAID' || statusStr === 'SUCCESS') {
                 computedStatus = 1;
+              } else if (targetItem.status === -1 || statusStr === 'FAILED' || statusStr === 'DECLINED') {
+                computedStatus = -1;
               }
             }
 
@@ -448,7 +471,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
                 trace_number, transaction_reference, integrator_reference, aggregator_reference, 
                 amount, fee, status, remarks, date_time_created, date_time_updated
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-              ON CONFLICT (trace_number, transaction_reference) DO NOTHING`,
+              ON CONFLICT DO NOTHING`,
               [
                 String(traceNumber),
                 uniqueTxRef,
@@ -468,6 +491,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
         }
       }
       
+      // Return wrapped objects data array cleanly
       return res.json({
         code: 200000,
         message: "Transaction details fetched successfully.",
@@ -480,10 +504,22 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
       // 🛡️ MEMORY WRITE PATCH: Tell Redis to register this key rejection footprint for 5 minutes
       await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
 
-      return res.status(404).json({
-        code: 404000,
-        message: "No active transaction records found matching this explicit lookup parameters matrix across production servers.",
-        data: []
+      // ✨ RETURN A STRUCTURAL FALLBACK TARGET OBJECT INSTEAD OF AN EMPTY ARRAY
+      return res.json({
+        code: 200000,
+        message: "Transaction details fetched successfully.",
+        data: [{
+          transactionReferenceNumber: String(traceNumber),
+          integratorReferenceNumber: '---',
+          aggregatorReferenceNumber: '---',
+          transactionAmount: 0,
+          transactionFee: 0,
+          status: -1,
+          remarks: "Reference target entry not identified inside ledger streams.",
+          description: "Failed Lookup Entry",
+          dateTimeCreated: new Date().toISOString(),
+          dateTimeStatusUpdated: new Date().toISOString()
+        }]
       });
     }
 

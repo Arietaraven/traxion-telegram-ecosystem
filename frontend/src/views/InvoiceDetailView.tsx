@@ -53,27 +53,35 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
   // Isolated target query identifier sequence
   const activeQueryKey = invoiceCode || refNum;
 
-  // 🎯 STRICT NOT FOUND CONDITIONAL CHECK
-  // True when the transaction payload object is entirely missing, empty, or returns a 404 response
-  const isNotFound = 
-    !transaction || 
-    Object.keys(transaction).length === 0 ||
-    transaction.statusCode === 404 ||
-    String(transaction.status).toUpperCase() === 'NOT FOUND';
-
-  // 📊 STATUS ENUM SEGMENTATION PIPELINE (Only parsed if the record actually exists)
+  // 📊 STATUS SEGMENTATION PIPELINE (Granular State Matching)
   const currentStatus = transaction?.status !== undefined ? String(transaction.status) : '';
   
-  const isSuccessful = !isNotFound && (currentStatus === '1' || currentStatus.toUpperCase() === 'SUCCESSFUL' || currentStatus.toUpperCase() === 'SUCCESS' || currentStatus.toUpperCase() === 'PAID');
-  const isPending = !isNotFound && (currentStatus === '0' || currentStatus.toUpperCase() === 'PENDING');
-  const isFailed = !isNotFound && (currentStatus === '-1' || currentStatus.toUpperCase() === 'FAILED');
+  let isSuccessful = false;
+  let isPending = false;
+  let isFailed = false;
+  let isNotFound = !transaction || Object.keys(transaction).length === 0 || transaction.statusCode === 404 || String(transaction.status).toUpperCase() === 'NOT FOUND';
 
-  // ₱ CENTAVO TO PESO CONVERSION PIPELINE
+  if (!isNotFound) {
+    if (currentStatus === '1' || currentStatus.toUpperCase() === 'SUCCESSFUL' || currentStatus.toUpperCase() === 'SUCCESS' || currentStatus.toUpperCase() === 'PAID') {
+      isSuccessful = true;
+    } else if (currentStatus === '0' || currentStatus.toUpperCase() === 'PENDING') {
+      isPending = true;
+    } else if (currentStatus === '-1' || currentStatus.toUpperCase() === 'FAILED') {
+      // Look inside backend cache rejection messages to capture true non-existent items
+      if (transaction?.remarks && String(transaction.remarks).toLowerCase().includes("not identified")) {
+        isNotFound = true;
+      } else {
+        isFailed = true;
+      }
+    }
+  }
+
+  // ₱ ✨ FIXED: Parse raw cent values cleanly as integers before running division
   const rawAmountInput = transaction?.transactionAmount ?? transaction?.amount ?? 0;
-  const rawAmount = (typeof rawAmountInput === 'string' ? parseFloat(rawAmountInput) : Number(rawAmountInput)) / 100;
+  const rawAmount = (typeof rawAmountInput === 'string' ? parseInt(rawAmountInput, 10) : Number(rawAmountInput)) / 100;
 
   const rawFeeInput = transaction?.transactionFee || 0;
-  const feeAmount = (typeof rawFeeInput === 'string' ? parseFloat(rawFeeInput) : Number(rawFeeInput)) / 100;
+  const feeAmount = (typeof rawFeeInput === 'string' ? parseInt(String(rawFeeInput), 10) : Number(rawFeeInput)) / 100;
 
   const totalDisplay = rawAmount;
 
@@ -147,6 +155,24 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
     );
   }
 
+  // 🪐 SETUP UI THEME HIGHLIGHTING MATRIX
+  let statusColor = '#fbbf24'; // Pending amber
+  let statusBgColor = 'rgba(251, 191, 36, 0.12)';
+  let statusBorderColor = 'rgba(251, 191, 36, 0.25)';
+  let statusText = 'PENDING';
+
+  if (isSuccessful) {
+    statusColor = '#10b981'; // Green
+    statusBgColor = 'rgba(16, 185, 129, 0.12)';
+    statusBorderColor = 'rgba(16, 185, 129, 0.25)';
+    statusText = 'SUCCESSFUL';
+  } else if (isFailed) {
+    statusColor = '#f87171'; // Failed Light Red
+    statusBgColor = 'rgba(248, 113, 113, 0.12)';
+    statusBorderColor = 'rgba(248, 113, 113, 0.3)';
+    statusText = 'FAILED';
+  }
+
   // 📋 DISPLAY MODE B: STANDARD TRANSACTION INVOICE CARD (FOUND VIEW)
   return (
     <div style={styles.card}>
@@ -154,15 +180,11 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
       <div style={styles.badgeContainer}>
         <div style={{
           ...styles.statusBadge,
-          backgroundColor: isSuccessful ? 'rgba(16, 185, 129, 0.12)' : isPending ? 'rgba(251, 191, 36, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-          color: isSuccessful ? '#10b981' : isPending ? '#fbbf24' : '#ef4444',
-          border: isSuccessful 
-            ? '1px solid rgba(16, 185, 129, 0.25)' 
-            : isPending 
-            ? '1px solid rgba(251, 191, 36, 0.25)' 
-            : '1px solid rgba(239, 68, 68, 0.25)'
+          backgroundColor: statusBgColor,
+          color: statusColor,
+          border: statusBorderColor
         }}>
-          ● {isSuccessful ? 'SUCCESSFUL' : isPending ? 'PENDING' : 'FAILED'}
+          ● {statusText}
         </div>
       </div>
 
@@ -202,6 +224,13 @@ export default function InvoiceDetailView({ transaction, invoiceCode }: InvoiceD
           <span style={styles.nestedLabel}>Aggregator Reference Number</span>
           <div style={styles.nestedValue}>{aggRef}</div>
         </div>
+
+        {transaction?.remarks && (
+          <div style={{ ...styles.nestedBox, borderColor: isFailed ? 'rgba(248, 113, 113, 0.15)' : 'rgba(255, 255, 255, 0.04)' }}>
+            <span style={styles.nestedLabel}>Gateway System Remarks</span>
+            <div style={{ ...styles.nestedValue, color: isFailed ? '#f87171' : '#8aa1b5' }}>{transaction.remarks}</div>
+          </div>
+        )}
 
         <div style={styles.dividerInside} />
 
