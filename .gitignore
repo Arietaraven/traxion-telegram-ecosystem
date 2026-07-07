@@ -23,3 +23,7 @@ backend/dist/
 .DS_Store
 Thumbs.db
 *.log
+
+# 🗄️ LOCAL SQLITE BINARY ARCHIVE TRACKS (SERVERLESS ENGINE)
+*.sqlite
+database.sqlite

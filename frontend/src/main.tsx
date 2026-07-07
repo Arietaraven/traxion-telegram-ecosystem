@@ -1,7 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import './index.css';
 
 // 🚀 CRITICAL TELEGRAM HANDSHAKE MODULE
 // Notifies the parent Telegram window container shell that our assets have loaded cleanly 

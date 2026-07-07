@@ -190,13 +190,6 @@ export default function UniversalDetailView({ transactions, invoiceCode }: Unive
                 <div style={styles.nestedValue}>{aggRef}</div>
               </div>
 
-              {transaction.remarks && (
-                <div style={{ ...styles.nestedBox, borderColor: isFailed ? 'rgba(248, 113, 113, 0.15)' : 'rgba(255, 255, 255, 0.04)' }}>
-                  <span style={styles.nestedLabel}>Gateway System Remarks</span>
-                  <div style={{ ...styles.nestedValue, color: isFailed ? '#f87171' : '#8aa1b5' }}>{transaction.remarks}</div>
-                </div>
-              )}
-
               <div style={styles.dividerInside} />
 
               {/* Core Attributes Footer Array */}
