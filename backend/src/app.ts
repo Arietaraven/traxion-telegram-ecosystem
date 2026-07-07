@@ -9,7 +9,7 @@ import { google } from 'googleapis';
 import base32Decode from 'base32-decode';
 import { createWorker } from 'tesseract.js';
 import { Telegraf, Markup } from 'telegraf';
-import { db } from '../src/config/database';
+import { db } from '../src/config/database'; // Ensure your database file handles the new sqlite export wrapper
 import { redis } from '../src/config/redis';
 import { HARDCODED_FAQS } from './constants/faqData';
 import { getMainMenu } from './telegram/menu';
@@ -226,7 +226,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
   }
 
   try {
-    // 🏢 PHASE 1: Scan local database warehouse cache first
+    // 🏢 PHASE 1: Scan local SQLite file database warehouse cache first
     const localDatabaseCheck = await db.query(
       'SELECT * FROM cached_transactions WHERE trace_number = $1 ORDER BY date_time_created DESC',
       [String(traceNumber)]
@@ -385,10 +385,10 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
           console.log(`🔄 [Crypto Sync]: Evaluating ${distinctDecryptionTimeMatrix.length} candidate windows using auto-fetched keys...`);
 
           outerMatrixLoop: 
-          for (const currentSeed of secretSeedsToTry) {
+          for (const currentSecret of secretSeedsToTry) {
             for (const calculatedTimestamp of distinctDecryptionTimeMatrix) {
               try {
-                const calculatedDecryptionOtp = generateRollingTOTP(currentSeed, calculatedTimestamp);
+                const calculatedDecryptionOtp = generateRollingTOTP(currentSecret, calculatedTimestamp);
                 const bytesDecrypted = CryptoJS.AES.decrypt(payloadData.data, calculatedDecryptionOtp);
                 const testString = bytesDecrypted.toString(CryptoJS.enc.Utf8);
                 
@@ -398,7 +398,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
                       (trimmedTest.startsWith('[') && trimmedTest.endsWith(']'))) {
                     
                     plainTextJsonString = testString;
-                    console.log(`🔓 [Crypto Engine Sync Success]: Unlocked using seed [${currentSeed}] at timestamp: ${calculatedTimestamp}`);
+                    console.log(`🔓 [Crypto Engine Sync Success]: Unlocked using seed [${currentSecret}] at timestamp: ${calculatedTimestamp}`);
                     break outerMatrixLoop; 
                   }
                 }
@@ -455,23 +455,31 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
         if (targetItem) {
           try {
             let computedStatus = 0;
+            let invoiceStatusText = 'Pending';
+
             if (targetItem.status !== undefined && targetItem.status !== null) {
               const statusStr = String(targetItem.status).toUpperCase();
               if (targetItem.status === 1 || statusStr === 'SUCCESSFUL' || statusStr === 'PAID' || statusStr === 'SUCCESS') {
                 computedStatus = 1;
+                invoiceStatusText = 'Successful';
               } else if (targetItem.status === -1 || statusStr === 'FAILED' || statusStr === 'DECLINED') {
                 computedStatus = -1;
+                invoiceStatusText = 'Failed';
               }
             }
 
             const uniqueTxRef = targetItem.transactionReferenceNumber || targetItem.referenceId || `FALLBACK-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+            
+            // Raw cent-value parsed safely into decimal Pesos for the legacy invoices schema amount mapping
+            const rawAmountInput = targetItem.transactionAmount ?? targetItem.amount ?? 0;
+            const finalAmountDecimal = (typeof rawAmountInput === 'string' ? parseInt(rawAmountInput, 10) : Number(rawAmountInput)) / 100;
 
+            // 1️⃣ Keep writing to cached_transactions
             await db.query(
-              `INSERT INTO cached_transactions (
+              `INSERT OR IGNORE INTO cached_transactions (
                 trace_number, transaction_reference, integrator_reference, aggregator_reference, 
                 amount, fee, status, remarks, date_time_created, date_time_updated
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-              ON CONFLICT DO NOTHING`,
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
               [
                 String(traceNumber),
                 uniqueTxRef,
@@ -481,10 +489,26 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
                 targetItem.transactionFee || targetItem.fee || 0,
                 computedStatus,
                 targetItem.remarks || null,
-                targetItem.dateTimeCreated ? new Date(targetItem.dateTimeCreated) : null,
-                targetItem.dateTimeStatusUpdated ? new Date(targetItem.dateTimeStatusUpdated) : null
+                targetItem.dateTimeCreated ? new Date(targetItem.dateTimeCreated).toISOString() : null,
+                targetItem.dateTimeStatusUpdated ? new Date(targetItem.dateTimeStatusUpdated).toISOString() : null
               ]
             );
+
+            // 2️⃣ ✨ ADDED: Automatically write to invoices table as well
+            await db.query(
+              `INSERT OR IGNORE INTO invoices (
+                invoice_code, amount, merchant_name, status, reference_number, created_at
+              ) VALUES ($1, $2, $3, $4, $5, $6)`,
+              [
+                String(traceNumber),                        // invoice_code
+                finalAmountDecimal,                         // amount in Pesos (e.g. 365.00)
+                targetItem.description || 'InstaPay Cashout', // merchant_name
+                invoiceStatusText,                          // status ('Successful', 'Failed', 'Pending')
+                uniqueTxRef,                                // reference_number (Unique Key)
+                targetItem.dateTimeCreated ? new Date(targetItem.dateTimeCreated).toISOString() : new Date().toISOString()
+              ]
+            );
+
           } catch (dbError: any) {
             console.error("⚠️ [Database Cache Insertion Bypassed Row Exception]:", dbError.message);
           }
@@ -687,7 +711,7 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
           }
 
           if (rawItemsArray.length > 0) {
-            rawItemsArray.forEach((extractedItem: any) => {
+            for (const extractedItem of rawItemsArray) {
               const incomingAmount = extractedItem.transactionAmount ?? extractedItem.amount ?? 0;
               const incomingFee = extractedItem.transactionFee ?? extractedItem.fee ?? 0;
 
@@ -703,8 +727,34 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
                 normalStatus = -1;
               }
 
+              const cleanTxRef = extractedItem.transactionReferenceNumber || extractedItem.referenceId || cleanReferenceId;
+
+              // ✨ ADDED: Cache universal bulk search findings dynamically into SQLite
+              try {
+                await db.query(
+                  `INSERT OR IGNORE INTO cached_transactions (
+                    trace_number, transaction_reference, integrator_reference, aggregator_reference, 
+                    amount, fee, status, remarks, date_time_created, date_time_updated
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                  [
+                    cleanReferenceId,
+                    cleanTxRef,
+                    extractedItem.integratorReferenceNumber || '---',
+                    extractedItem.aggregatorReferenceSegment || extractedItem.aggregatorReferenceNumber || '---',
+                    incomingAmount,
+                    incomingFee,
+                    normalStatus,
+                    extractedItem.remarks || extractedItem.description || null,
+                    extractedItem.dateTimeCreated || extractedItem.created_at || new Date().toISOString(),
+                    extractedItem.dateTimeStatusUpdated || extractedItem.updated_at || new Date().toISOString()
+                  ]
+                );
+              } catch (cacheErr: any) {
+                console.error("⚠️ [Universal Cache Write Error]:", cacheErr.message);
+              }
+
               batchResultsCollection.push({
-                transactionReferenceNumber: extractedItem.transactionReferenceNumber || extractedItem.referenceId || cleanReferenceId,
+                transactionReferenceNumber: cleanTxRef,
                 integratorReferenceNumber: extractedItem.integratorReferenceNumber || '---',
                 aggregatorReferenceNumber: extractedItem.aggregatorReferenceSegment || extractedItem.aggregatorReferenceNumber || '---',
                 transactionAmount: isNaN(finalAmountPeso) ? 0 : finalAmountPeso,
@@ -715,7 +765,7 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
                 dateTimeCreated: extractedItem.dateTimeCreated || extractedItem.created_at || new Date().toISOString(),
                 dateTimeStatusUpdated: extractedItem.dateTimeStatusUpdated || extractedItem.updated_at || new Date().toISOString()
               });
-            });
+            }
           } else {
             // 🛡️ MEMORY WRITE PATCH: If API responds but contains an empty record structure, register rejection footprints
             await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
@@ -822,7 +872,7 @@ app.get('/health', async (req, res) => {
     res.status(200).json({
       status: 'healthy',
       timestamp: new Date(),
-      services: { postgres: 'connected', redis: redisPing === 'PONG' ? 'connected' : 'disconnected' }
+      services: { localSqlite: 'connected', redis: redisPing === 'PONG' ? 'connected' : 'disconnected' }
     });
   } catch (error: any) {
     res.status(500).json({ status: 'unhealthy', error: error.message });
@@ -851,7 +901,7 @@ if (!BOT_TOKEN) {
       
       const temporaryStatusMessage = await ctx.reply('🔄 _Syncing Traxion timeline data via database matrix cache..._', { parse_mode: 'Markdown' });
 
-      // ⚡ SUPER SPEED: Simple raw textual lookups against your cron-populated database cache table
+      // ⚡ SUPER SPEED: Simple raw textual lookups against your SQLite cron database table rows
       const cachedAdvisories = await db.query('SELECT * FROM advisories ORDER BY created_at DESC LIMIT 15');
 
       if (cachedAdvisories.rows.length === 0) {
@@ -876,16 +926,13 @@ if (!BOT_TOKEN) {
         const fullDetectedText = row.extracted_text;
         const lowerText = fullDetectedText.toLowerCase();
 
-        // Filter out non-maintenance items
         const isStandardMaintenanceAdvisory = lowerText.includes('maintenance') || lowerText.includes('scheduled');
         if (!isStandardMaintenanceAdvisory) continue;
 
-        // Content Deduplicator check across multiple rows
         const normalizedContentKey = lowerText.replace(/[^a-z0-9]/g, '').substring(0, 150);
         if (processedTextsLog.has(normalizedContentKey)) continue;
         processedTextsLog.add(normalizedContentKey);
 
-        // Date Parsing Engine
         const dateRegex = /(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:\s*,\s*)\d{4}|\d{4}-\d{2}-\d{2}/gi;
         const rawMatches = fullDetectedText.match(dateRegex);
 
@@ -903,7 +950,6 @@ if (!BOT_TOKEN) {
           advisoryTargetDate = new Date(fallbackDate.getFullYear(), fallbackDate.getMonth(), fallbackDate.getDate());
         }
 
-        // Timeline Matrix Logic
         let statusEmoji = '🔴'; 
         let statusText = 'Ongoing';
 
@@ -913,13 +959,11 @@ if (!BOT_TOKEN) {
           statusEmoji = '🟢'; statusText = 'Done';
         }
 
-        // Timeline Window Check
         const isInsideTimelineWindow = (advisoryTargetDate >= sevenDaysAgo && advisoryTargetDate <= sevenDaysAhead);
 
         if (isInsideTimelineWindow) {
           const dateStringLabel = processedDates.length > 0 ? processedDates[processedDates.length - 1] : advisoryTargetDate.toDateString();
           
-          // Custom Paragraph Extractor Style Layout
           let printableSummarySnippet = "";
           const startIndex = lowerText.indexOf("please be advised");
           const endIndex = lowerText.indexOf("at this time.");
@@ -939,7 +983,6 @@ if (!BOT_TOKEN) {
           summaryReportText += `${statusEmoji} **${statusText.toUpperCase()}** • ${dateStringLabel}\n🔧 _System Target_: ${printableSummarySnippet}\n\n`;
 
           if (mediaGroupItems.length < 10) {
-            // Note: Keep Google API configurations context separate here ONLY to fetch the images binary bytes array streams dynamically
             const auth = new google.auth.GoogleAuth({
               keyFile: path.resolve(process.cwd(), 'google-credentials.json'),
               scopes: ['https://www.googleapis.com/auth/drive.readonly'],
@@ -953,12 +996,10 @@ if (!BOT_TOKEN) {
             });
           }
         }
-      } // 📜 Correctly closes the `for...of` loop here
+      }
 
-      // 🔄 Cleans up the loading message immediately after the loop resolves
       try { await ctx.telegram.deleteMessage(ctx.chat!.id, temporaryStatusMessage.message_id); } catch (e) {}
 
-      // Delivery Phase
       if (mediaGroupItems.length > 0) {
         summaryReportText += `📊 **Summary Metrics Log**:\n📅 Upcoming: \`${upcomingCount}\` | 🔴 Ongoing: \`${ongoingCount}\` | 🟢 Done: \`${doneCount}\``;
 
@@ -971,7 +1012,6 @@ if (!BOT_TOKEN) {
       }
     } catch (err: any) {
       console.error('❌ [Live Database Fetch Advisory Failure]:', err.message);
-      // Fallback cleanup execution block
       ctx.reply('❌ Unable to process the advisory stream.');
     }
   });
@@ -1027,7 +1067,6 @@ if (!BOT_TOKEN) {
     let calculatedDate = new Date().toISOString().split('T')[0];
     let traceCode = rawText;
 
-    // 🔍 PRECISE PATTERN MATCHING ENGINE: Handles flexible 4-to-6 digit trace matches seamlessly
     const multiParamMatch = rawText.match(/^(\d{4,6})\s+(\d{4}-\d{2}-\d{2}|\d{8})$/);
     
     if (multiParamMatch) {
@@ -1042,7 +1081,6 @@ if (!BOT_TOKEN) {
       console.log(`🎯 [Bot Precise Sync Engine]: Target Trace Isolated: ${traceCode} | Query Date Matrix: ${calculatedDate}`);
     }
 
-    // CONDITION A: Handle standard flexible 4-to-6 digit codes or multi-parameter queries
     if (/^\d{4,6}$/.test(traceCode)) {
       const isCleared = await checkRateLimit(ctx, telegramUserId);
       if (!isCleared) return;
@@ -1060,7 +1098,6 @@ if (!BOT_TOKEN) {
         tmaMarkup
       );
     }
-    // 🚀 CONDITION B: Handle multi-line strings, single hashes, long numbers, TXN-, or QRP- strings safely
     else {
       const extractedCodes = rawText
         .split(/[\n\s,]+/)
