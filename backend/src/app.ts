@@ -46,28 +46,11 @@ app.use((req, res, next) => {
 // 🚀 UNIFIED FRONTEND INTERFACE MATRIX (PRODUCTION DIST ENGINE)
 // =========================================================================
 
-// Resolve the absolute path to your newly compiled frontend/dist folder
-const frontendDistPath = path.resolve(__dirname, '..', '..', 'frontend', 'dist');
 
 // Start the background cron sync service immediately on application boot
 initAdvisoryCron();
 console.log('⚙️ Background task processing runners active.');
 
-// Tell Express to automatically host all nested compiled script/style bundles
-app.use('/app', express.static(frontendDistPath));
-app.use(express.static(frontendDistPath));
-
-// Main Document Route: Serves the compiled index.html file with production links natively
-app.get(['/app', '/app/'], (req, res) => {
-  const productionIndexPath = path.join(frontendDistPath, 'index.html');
-  
-  if (fs.existsSync(productionIndexPath)) {
-    res.sendFile(productionIndexPath);
-  } else {
-    console.error('❌ [Critical Asset Error]: dist/index.html is missing. Run npx vite build in frontend directory!');
-    res.status(500).send('🔄 Syncing server layouts... Please close and retry in a few seconds.');
-  }
-});
 
 // =========================================================================
 // 🔒 CRYPTOGRAPHIC UTILITY BUFFER FUNCTIONS (POSTMAN EQUIVALENCE MATRIX)
@@ -255,14 +238,13 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
       });
     }
 
-    // 🛡️ NEW OPTIMIZATION STEP: Guard against known invalid reference attacks
+    // 🛡️ Guard against known invalid reference attacks
     const redisNegativeCacheKey = `negative:txn:${traceNumber}`;
     const isKnownInvalid = await redis.get(redisNegativeCacheKey);
     
     if (isKnownInvalid === 'NOT_FOUND') {
       console.log(`🛡️ [Redis Guard Hit]: Blocking expensive lookup for known invalid trace: ${traceNumber}`);
       
-      // ✨ FIXED: Return structured fallback data even on Redis hit to prevent frontend blanks
       return res.json({
         code: 200000,
         message: "Transaction details fetched successfully.",
@@ -318,7 +300,6 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
     // 🔑 FETCH LIVE ACTIVE SESSION DATA MATRIX
     const sessionContext: any = await getValidSessionToken();
 
-    // Clean, single-assignment extraction with safe operational fallback defaults
     const bearerToken = (typeof sessionContext === 'object' ? sessionContext.accessToken : sessionContext) || "";
     const systemSecretSeed = (typeof sessionContext === 'object' && sessionContext.secretKey) ? sessionContext.secretKey : "BCEKLKEDLCJKQPAN";
 
@@ -347,11 +328,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
         if (payloadData && typeof payloadData.data === 'string' && payloadData.data.startsWith('U2FsdGVkX1')) {
           
           let plainTextJsonString = "";
-
-          // Setup our seed arrays dynamically including our auto-fetched token seed
           const secretSeedsToTry = [systemSecretSeed, "EWSXREMVLJHWXJXU"]; 
-
-          // BUILD THE SATURATED TIMESTAMPS MATRIX ARRAY
           const candidateTimes: number[] = [];
 
           if (serverResponseTimestamp) {
@@ -402,21 +379,18 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
                     break outerMatrixLoop; 
                   }
                 }
-              } catch (innerCryptoError) {
-                // Pass to evaluate next matrix variation
-              }
+              } catch (innerCryptoError) {}
             }
           }
 
           if (plainTextJsonString) {
             payloadData.data = JSON.parse(plainTextJsonString);
           } else {
-            console.error("❌ [Crypto Engine Matrix Exhausted]: Decryption failed or returned invalid data structures across all variations.");
+            console.error("❌ [Crypto Engine Matrix Exhausted]: Decryption failed across all variations.");
             continue; 
           }
         }
 
-        // Unwrap and map results
         let innerDataBlock = payloadData?.data;
         let localExtractedList: any[] = [];
 
@@ -435,7 +409,6 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
           }
         }
 
-        // Filter out valid data entries only
         if (localExtractedList.length > 0 && localExtractedList[0] && !localExtractedList[0].error) {
           extractedTransactionsList = localExtractedList;
           console.log(`✅ [Adaptive Processing Match]: Successfully parsed ${extractedTransactionsList.length} records.`);
@@ -443,7 +416,7 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
         }
 
       } catch (loopError: any) {
-        console.warn(`⚠️ [Format Check Notice]: Date format ${targetedDateFormat} dropped out layout link: ${loopError.message}`);
+        console.warn(`⚠️ [Format Check Notice]: Date format ${targetedDateFormat} dropped out: ${loopError.message}`);
       }
     }
 
@@ -469,12 +442,9 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
             }
 
             const uniqueTxRef = targetItem.transactionReferenceNumber || targetItem.referenceId || `FALLBACK-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            
-            // Raw cent-value parsed safely into decimal Pesos for the legacy invoices schema amount mapping
             const rawAmountInput = targetItem.transactionAmount ?? targetItem.amount ?? 0;
             const finalAmountDecimal = (typeof rawAmountInput === 'string' ? parseInt(rawAmountInput, 10) : Number(rawAmountInput)) / 100;
 
-            // 1️⃣ Keep writing to cached_transactions
             await db.query(
               `INSERT OR IGNORE INTO cached_transactions (
                 trace_number, transaction_reference, integrator_reference, aggregator_reference, 
@@ -494,28 +464,26 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
               ]
             );
 
-            // 2️⃣ ✨ ADDED: Automatically write to invoices table as well
             await db.query(
               `INSERT OR IGNORE INTO invoices (
                 invoice_code, amount, merchant_name, status, reference_number, created_at
               ) VALUES ($1, $2, $3, $4, $5, $6)`,
               [
-                String(traceNumber),                        // invoice_code
-                finalAmountDecimal,                         // amount in Pesos (e.g. 365.00)
-                targetItem.description || 'InstaPay Cashout', // merchant_name
-                invoiceStatusText,                          // status ('Successful', 'Failed', 'Pending')
-                uniqueTxRef,                                // reference_number (Unique Key)
+                String(traceNumber),
+                finalAmountDecimal,
+                targetItem.description || 'InstaPay Cashout',
+                invoiceStatusText,
+                uniqueTxRef,
                 targetItem.dateTimeCreated ? new Date(targetItem.dateTimeCreated).toISOString() : new Date().toISOString()
               ]
             );
 
           } catch (dbError: any) {
-            console.error("⚠️ [Database Cache Insertion Bypassed Row Exception]:", dbError.message);
+            console.error("⚠️ [Database Cache Insertion Exception]:", dbError.message);
           }
         }
       }
       
-      // Return wrapped objects data array cleanly
       return res.json({
         code: 200000,
         message: "Transaction details fetched successfully.",
@@ -523,12 +491,9 @@ app.get('/transactions/details/instapay/trace', async (req, res) => {
       });
 
     } else {
-      console.warn(`⚠️ [Backend Security Sync]: Production API returned no matching collection structures for trace: ${traceNumber}`);
-      
-      // 🛡️ MEMORY WRITE PATCH: Tell Redis to register this key rejection footprint for 5 minutes
+      console.warn(`⚠️ [Backend Security Sync]: API returned no matching collection for trace: ${traceNumber}`);
       await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
 
-      // ✨ RETURN A STRUCTURAL FALLBACK TARGET OBJECT INSTEAD OF AN EMPTY ARRAY
       return res.json({
         code: 200000,
         message: "Transaction details fetched successfully.",
@@ -572,7 +537,6 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
     return res.status(400).json({ code: 400000, message: "No valid reference keys targeted.", data: [] });
   }
 
-  // 🛡️ NEW OPTIMIZATION STEP: Intercept and filter the batch queue to strip out entries already flagged as invalid in Redis
   const verifiedReferenceQueue: string[] = [];
   const batchResultsCollection: any[] = [];
 
@@ -581,7 +545,7 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
     const isKnownInvalid = await redis.get(redisNegativeCacheKey);
     
     if (isKnownInvalid === 'NOT_FOUND') {
-      console.log(`🛡️ [Redis Guard Hit]: Dropping known invalid item from active search processing queue: ${ref}`);
+      console.log(`🛡️ [Redis Guard Hit]: Dropping known invalid item from active search queue: ${ref}`);
       batchResultsCollection.push({
         transactionReferenceNumber: ref,
         integratorReferenceNumber: '---',
@@ -606,7 +570,6 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
     const bearerToken = (typeof sessionContext === 'object' ? sessionContext.accessToken : sessionContext) || "";
     const dynamicSecretSeed = (typeof sessionContext === 'object' && sessionContext.secretKey) ? sessionContext.secretKey : "BCEKLKEDLCJKQPAN";
 
-    // Loop exclusively through verified valid items remaining in the execution queue
     for (const cleanReferenceId of verifiedReferenceQueue) {
       const redisNegativeCacheKey = `negative:txn:${cleanReferenceId}`;
       let retryCount = 0;
@@ -682,9 +645,7 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
                     console.log(`🔓 [Crypto Engine Sync]: Decryption success via epoch offset: ${targetTimestamp}`);
                     break;
                   }
-                } catch (innerCryptoErr) {
-                  // Check next timestamp offset
-                }
+                } catch (innerCryptoErr) {}
               }
               
               if (plainTextJsonString) {
@@ -729,7 +690,6 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
 
               const cleanTxRef = extractedItem.transactionReferenceNumber || extractedItem.referenceId || cleanReferenceId;
 
-              // ✨ ADDED: Cache universal bulk search findings dynamically into SQLite
               try {
                 await db.query(
                   `INSERT OR IGNORE INTO cached_transactions (
@@ -767,7 +727,6 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
               });
             }
           } else {
-            // 🛡️ MEMORY WRITE PATCH: If API responds but contains an empty record structure, register rejection footprints
             await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
 
             batchResultsCollection.push({
@@ -788,8 +747,6 @@ app.get('/transactions/details/:referenceId', async (req, res) => {
 
         } catch (singleLoopErr: any) {
           console.warn(`⚠️ Batch row skip exception handled for index: ${cleanReferenceId} -> ${singleLoopErr.message}`);
-          
-          // 🛡️ MEMORY WRITE PATCH: If network throws errors or decryption breaks, log as non-existent to avoid infinite retries
           await redis.setex(redisNegativeCacheKey, 300, 'NOT_FOUND');
 
           batchResultsCollection.push({
@@ -894,14 +851,13 @@ if (!BOT_TOKEN) {
 
   // =========================================================================
   // 📢 LIGHTWEIGHT BOT ADVISORY HANDLER (DB-Only Query Engine)
-  // =========================================================================/
+  // =========================================================================
   bot.action('menu_advisories', async (ctx) => {
     try {
       await ctx.answerCbQuery();
       
       const temporaryStatusMessage = await ctx.reply('🔄 _Syncing Traxion timeline data via database matrix cache..._', { parse_mode: 'Markdown' });
 
-      // ⚡ SUPER SPEED: Simple raw textual lookups against your SQLite cron database table rows
       const cachedAdvisories = await db.query('SELECT * FROM advisories ORDER BY created_at DESC LIMIT 15');
 
       if (cachedAdvisories.rows.length === 0) {
@@ -1020,24 +976,53 @@ if (!BOT_TOKEN) {
     try {
       await ctx.answerCbQuery();
       
-      const activeDomain = process.env.NGROK_URL || 'https://possible-buckwheat-abrasion.ngrok-free.dev';
-      
+      // Render standard Telegram callback buttons instead of WebApp buttons
       const keyboardButtons = HARDCODED_FAQS.map((row) => {
-        const secureUrl = `${activeDomain.replace(/\/$/, '')}/app/?faqId=${row.id}&v=${Date.now()}`;
         const label = `💡 [${row.category.toUpperCase()}] - ${row.keyword.toUpperCase()}`;
-        return [Markup.button.webApp(label, secureUrl)];
+        return [Markup.button.callback(label, `faq_detail_${row.id}`)];
       });
 
       ctx.reply(
         '💡 **Traxion Developer Knowledge Base**\n\n' +
-        'Our structured developer support database is connected! To search document files or pull code blocks instantly via global chats, trigger: `@traxion_hub_bot [keyword]`\n\n' +
-        'Alternatively, select a technical manual below to launch interactive layout views inside your overlay workspace:',
+        'Select a technical manual below to render implementation specs directly in chat, or search using: `@traxion_hub_bot [keyword]`',
         Markup.inlineKeyboard(keyboardButtons)
       );
 
     } catch (err: any) {
       console.error('❌ [FAQ Menu Generator Error]:', err.message);
-      ctx.reply('❌ Unable to process the documentation ledger stream at this moment.');
+      ctx.reply('❌ Unable to process documentation ledger stream.');
+    }
+  });
+
+  // Intercepts FAQ button clicks and prints the manual directly in the chat thread
+  bot.action(/^faq_detail_(\d+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery();
+      const faqId = parseInt(ctx.match[1], 10);
+      const matchedFaq = HARDCODED_FAQS.find(faq => faq.id === faqId);
+
+      if (!matchedFaq) {
+        return ctx.reply('❌ **FAQ Record Not Found**', { parse_mode: 'Markdown' });
+      }
+
+      const formattedFaqMessage = 
+        `💡 **TRAXION IMPLEMENTATION MANUAL**\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📁 **CATEGORY**: \`${matchedFaq.category.toUpperCase()}\`\n` +
+        `🏷️ **TAG**: \`#${matchedFaq.keyword.toLowerCase()}\`\n\n` +
+        `❓ **${matchedFaq.question}**\n\n` +
+        `📖 **Implementation Code / Spec**:\n` +
+        `\`\`\`text\n` +
+        `${matchedFaq.answer}\n` +
+        `\`\`\`\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `🤖 _@traxion_hub_bot_`;
+
+      await ctx.reply(formattedFaqMessage, { parse_mode: 'Markdown' });
+
+    } catch (err: any) {
+      console.error('❌ [FAQ Detail Reply Error]:', err.message);
+      ctx.reply('❌ Unable to fetch FAQ details at this time.');
     }
   });
 
@@ -1058,84 +1043,117 @@ if (!BOT_TOKEN) {
     ctx.reply('🔍 **Universal Reference Router**\nEnter any Traxion reference sequence string (Transactions, Payouts) to analyze routing path history metadata:');
   });
 
-  // Global Text Interceptor (Dual Router: Handles Invoice Codes, Dates & Universal System References)
+  // =========================================================================
+  // 💬 GLOBAL TEXT INTERCEPTOR: DIRECT CHAT RESPONSE RENDERER (NO MINI APP POPUP)
+  // =========================================================================
   bot.on('text', async (ctx) => {
     const rawText = ctx.message.text.trim();
     const telegramUserId = ctx.from.id;
-    const activeDomain = process.env.NGROK_URL || 'https://possible-buckwheat-abrasion.ngrok-free.dev';
-    
+
+    // Rate-limiting check
+    const isCleared = await checkRateLimit(ctx, telegramUserId);
+    if (!isCleared) return;
+
     let calculatedDate = new Date().toISOString().split('T')[0];
     let traceCode = rawText;
 
     const multiParamMatch = rawText.match(/^(\d{4,6})\s+(\d{4}-\d{2}-\d{2}|\d{8})$/);
-    
     if (multiParamMatch) {
       traceCode = multiParamMatch[1];
       let matchedDate = multiParamMatch[2];
-      
       if (matchedDate.length === 8 && !matchedDate.includes('-')) {
         calculatedDate = `${matchedDate.substring(0, 4)}-${matchedDate.substring(4, 6)}-${matchedDate.substring(6, 8)}`;
       } else {
         calculatedDate = matchedDate;
       }
-      console.log(`🎯 [Bot Precise Sync Engine]: Target Trace Isolated: ${traceCode} | Query Date Matrix: ${calculatedDate}`);
     }
 
-    if (/^\d{4,6}$/.test(traceCode)) {
-      const isCleared = await checkRateLimit(ctx, telegramUserId);
-      if (!isCleared) return;
+    const is6DigitTrace = /^\d{4,6}$/.test(traceCode);
+    const extractedCodes = rawText.split(/[\n\s,]+/).map(code => code.trim()).filter(code => code.length > 0);
+    const hasValidUniversalLookups = extractedCodes.some(code => 
+      (/^[A-Z0-9]{12,}$/i.test(code) && /[A-Z]/i.test(code)) || 
+      /^\d{15,50}$/.test(code) || 
+      /^TXN-/i.test(code) ||
+      /^QRP/i.test(code)
+    );
 
-      const completeSecureUrl = `${activeDomain.replace(/\/$/, '')}/app/?code=${traceCode}&date=${calculatedDate}&v=${Date.now()}`;
-      const tmaMarkup = Markup.inlineKeyboard([
-        [Markup.button.webApp('📱 View Branded Invoice', completeSecureUrl)]
-      ]);
-
-      ctx.reply(
-        `🧾 **InstaPay Precise Trace Record Initiated**\n\n` +
-        `• **Target Trace**: \`${traceCode}\`\n` +
-        `• **Target Query Date**: \`${calculatedDate}\`\n\n` +
-        `Click the button below to fetch live, production transaction metrics via secure network tunnels:`, 
-        tmaMarkup
+    if (!is6DigitTrace && !hasValidUniversalLookups) {
+      return ctx.reply(
+        'ℹ️ **Unrecognized Format**\n\nPlease enter an official reference string or a precise trace search using:\n`[6-digit trace code] [YYYY-MM-DD]`',
+        { parse_mode: 'Markdown' }
       );
     }
-    else {
-      const extractedCodes = rawText
-        .split(/[\n\s,]+/)
-        .map(code => code.trim())
-        .filter(code => code.length > 0);
 
-      const hasValidUniversalLookups = extractedCodes.some(code => 
-        (/^[A-Z0-9]{12,}$/i.test(code) && /[A-Z]/i.test(code)) || 
-        /^\d{15,50}$/.test(code) || 
-        /^TXN-/i.test(code) ||
-        /^QRP/i.test(code)
-      );
+    // Send instant feedback
+    const loadingMsg = await ctx.reply('🔄 _Querying live Traxion ledger streams..._', { parse_mode: 'Markdown' });
 
-      if (hasValidUniversalLookups) {
-        const isCleared = await checkRateLimit(ctx, telegramUserId);
-        if (!isCleared) return;
+    try {
+      let results: any[] = [];
 
-        const processedCodeParam = extractedCodes.join(',');
-        const universalSecureUrl = `${activeDomain.replace(/\/$/, '')}/app/?code=${encodeURIComponent(processedCodeParam)}&date=${calculatedDate}&v=${Date.now()}`;
-
-        const tmaMarkup = Markup.inlineKeyboard([
-          [Markup.button.webApp('🔍 Open Universal Search', universalSecureUrl)]
-        ]);
-
-        const dynamicLabel = extractedCodes.length > 1 
-          ? `🛰️ **Universal Identifiers Traced (${extractedCodes.length} Records Mixed)**`
-          : `🛰️ **Universal Identifier Traced**`;
-
-        ctx.reply(
-          `${dynamicLabel}\n\n` +
-          `• **Reference Count**: \`${extractedCodes.length} item(s) detected\`\n` +
-          `• **Routing Scope**: Global Ledger Registry Dynamic Bulk Search\n\n` +
-          `Click the button below to parse transaction history profiles dynamically inside a single unified window session:`, 
-          tmaMarkup
-        );
+      if (is6DigitTrace) {
+        // Query Trace API directly
+        const response = await axios.get(`http://127.0.0.1:${PORT}/transactions/details/instapay/trace`, {
+          params: { date: calculatedDate, traceNumber: traceCode }
+        });
+        results = response.data?.data || [];
       } else {
-        ctx.reply('ℹ️ Input format unrecognized. Pass an official reference ID key or execute a precise transaction search using:\n\`[6-digit code] [YYYY-MM-DD]\`');
+        // Query Universal Search API directly
+        const targetRef = extractedCodes.join(',');
+        const response = await axios.get(`http://127.0.0.1:${PORT}/transactions/details/${encodeURIComponent(targetRef)}`);
+        results = response.data?.data || [];
       }
+
+      // Delete loading message
+      try { await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id); } catch (e) {}
+
+      if (!results || results.length === 0) {
+        return ctx.reply('❌ **No Records Found**: Query sequence returned no active ledger matches.', { parse_mode: 'Markdown' });
+      }
+
+      // Format and reply directly inside Telegram chat
+      for (let i = 0; i < results.length; i++) {
+        const item = results[i];
+        
+        let statusEmoji = '🟡';
+        let statusText = 'PENDING';
+        if (item.status === 1 || String(item.status).toUpperCase() === 'SUCCESS' || String(item.status).toUpperCase() === 'SUCCESSFUL') {
+          statusEmoji = '🟢';
+          statusText = 'SUCCESSFUL';
+        } else if (item.status === -1 || String(item.status).toUpperCase() === 'FAILED') {
+          statusEmoji = '🔴';
+          statusText = 'FAILED';
+        }
+
+        const amountPeso = typeof item.transactionAmount === 'number' 
+          ? item.transactionAmount 
+          : parseFloat(String(item.transactionAmount || 0));
+
+        const feePeso = typeof item.transactionFee === 'number'
+          ? item.transactionFee
+          : parseFloat(String(item.transactionFee || 0));
+
+        const formattedText = 
+          `🧾 **TRAXION TRANSACTION RECORD** ${results.length > 1 ? `(#${i + 1}/${results.length})` : ''}\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `💰 **AMOUNT**: \`PHP ${amountPeso.toFixed(2)}\`\n` +
+          `${statusEmoji} **STATUS**: \`${statusText}\`\n\n` +
+          `🎯 **TARGET QUERY KEY**:\n\`${item.transactionReferenceNumber || 'N/A'}\`\n\n` +
+          `🔗 **TRANSACTION REF**: \`${item.transactionReferenceNumber || 'N/A'}\`\n` +
+          `⚙️ **INTEGRATOR REF**: \`${item.integratorReferenceNumber || '---'}\`\n` +
+          `🏢 **AGGREGATOR REF**: \`${item.aggregatorReferenceNumber || '---'}\`\n\n` +
+          `💸 **FEE**: \`PHP ${feePeso.toFixed(2)}\`\n` +
+          `📝 **REMARKS**: _${item.remarks || item.description || 'No remarks provided.'}_\n` +
+          `📅 **TIMESTAMP**: \`${item.dateTimeCreated ? new Date(item.dateTimeCreated).toLocaleString() : 'N/A'}\`\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `🤖 _@traxion_hub_bot_`;
+
+        await ctx.reply(formattedText, { parse_mode: 'Markdown' });
+      }
+
+    } catch (err: any) {
+      console.error('❌ [Direct Response Error]:', err.message);
+      try { await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id); } catch (e) {}
+      ctx.reply('❌ **Query Error**: Unable to fetch transaction details at this moment.', { parse_mode: 'Markdown' });
     }
   });
 
